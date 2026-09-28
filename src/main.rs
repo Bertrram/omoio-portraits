@@ -7,9 +7,10 @@
 //!
 //! `title` prints `title <title id>`, so Omoio can tell which game a .wua
 //! is. `pictures` writes one PNG per figure into the folder, the right way
-//! up, named `<id>-<variant>.png` with the variant as four hex digits, and
-//! the game's eight element symbols as white shapes, `element-<name>.png`,
-//! for Omoio to colour. It prints `progress <done> <of>` as it goes and
+//! up, named `<id>-<variant>.png` with the variant as four hex digits, the
+//! game's eight element symbols as white shapes, `element-<name>.png`, for
+//! Omoio to colour, and the badges of the eight ways a swapper moves,
+//! `movement-<name>.png`. It prints `progress <done> <of>` as it goes and
 //! `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
 
@@ -31,6 +32,28 @@ const PORTRAITS: &str = "content/archives/characterillustrations.pak";
 const SYMBOLS: &str = "content/archives/town3_elementalstones.pak";
 const SYMBOLS_PICTURE: &str = "_elementIcons_D";
 const SYMBOL_ORDER: [&str; 8] = ["tech", "water", "air", "undead", "magic", "life", "fire", "earth"];
+/// The archive of the pictures a level's list of Swap Zones shows: the
+/// zone's badge, a hexagon standing on a point, on a piece of the level.
+const ZONES: &str = "content/archives/collectibleicons.pak";
+/// The eight ways a swapper moves, as Omoio names them, and how the game
+/// ends the names of their Swap Zone pictures ("SZ_Tuto_Dig"). The game
+/// calls sneaking stealth there.
+const MOVEMENTS: [(&str, &str); 8] = [
+    ("bounce", "_bounce"),
+    ("climb", "_climb"),
+    ("dig", "_dig"),
+    ("rocket", "_rocket"),
+    ("sneak", "_stealth"),
+    ("speed", "_speed"),
+    ("spin", "_spin"),
+    ("teleport", "_teleport"),
+];
+/// Where the badge sits in every Swap Zone picture, all of them 200 pixels
+/// square: its middle, and how far its corners are from it. Measured where
+/// pictures of one zone with different levels behind agree.
+const ZONE_SIZE: usize = 200;
+const BADGE_MIDDLE: (f32, f32) = (100.5, 80.5);
+const BADGE_RADIUS: f32 = 61.0;
 const META: &str = "meta/meta.xml";
 /// DXT5 kept tiled for the Wii U's chip, as the game's pictures name it
 /// (a hash of "dxt5_tile_cafe").
@@ -91,8 +114,8 @@ fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     let archive = pak::open(&bytes)?;
     std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
     let portraits = textures(&archive);
-    // The element symbols come last, as one more step.
-    let steps = portraits.len() + 1;
+    // The element symbols and the movement badges come last, a step each.
+    let steps = portraits.len() + 2;
     let mut written = 0;
     for (done, file) in portraits.iter().enumerate() {
         println!("progress {done} {steps}");
@@ -110,6 +133,8 @@ fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     }
     println!("progress {} {steps}", portraits.len());
     written += symbols(game, folder)?;
+    println!("progress {} {steps}", portraits.len() + 1);
+    written += movements(game, folder)?;
     println!("progress {steps} {steps}");
     Ok(written)
 }
@@ -145,6 +170,67 @@ fn symbols(game: &Path, folder: &Path) -> Result<usize, String> {
     Ok(0)
 }
 
+/// The badge of each way a swapper moves, cut out of one of its Swap Zone
+/// pictures and written as `movement-<name>.png`. A game without Swap Zones
+/// just has none.
+fn movements(game: &Path, folder: &Path) -> Result<usize, String> {
+    let Some(bytes) = game_file(game, ZONES)? else {
+        return Ok(0);
+    };
+    let archive = pak::open(&bytes)?;
+    let mut done = [false; MOVEMENTS.len()];
+    // The archive holds every level's other collectibles too; only the
+    // zones' pictures are worth unpacking.
+    for file in textures(&archive).into_iter().filter(|file| file.name.to_ascii_lowercase().contains("_sz_")) {
+        let Some(picture) = igz::read(&archive.read(file)?) else {
+            continue;
+        };
+        let source = picture.source.to_ascii_lowercase();
+        let Some(index) = MOVEMENTS.iter().position(|(_, ending)| source.ends_with(ending)) else {
+            continue;
+        };
+        if done[index] || picture.format != DXT5_TILED || (picture.width, picture.height) != (ZONE_SIZE, ZONE_SIZE) {
+            continue;
+        }
+        let rows = upright(&picture)?;
+        let (left, top, wide, high) = badge_box();
+        let mut badge = vec![0; wide * high * 4];
+        for y in 0..high {
+            for x in 0..wide {
+                let from = ((top + y) * ZONE_SIZE + left + x) * 4;
+                let to = (y * wide + x) * 4;
+                badge[to..to + 3].copy_from_slice(&rows[from..from + 3]);
+                badge[to + 3] = (u32::from(rows[from + 3]) * badge_cover(left + x, top + y) / 16) as u8;
+            }
+        }
+        write(&folder.join(format!("movement-{}.png", MOVEMENTS[index].0)), wide, high, &badge)?;
+        done[index] = true;
+    }
+    Ok(done.iter().filter(|&&written| written).count())
+}
+
+/// The part of a Swap Zone picture the badge fills: left, top, width and
+/// height.
+fn badge_box() -> (usize, usize, usize, usize) {
+    let (x, y) = BADGE_MIDDLE;
+    let half_wide = BADGE_RADIUS * 3f32.sqrt() / 2.0;
+    let (left, top) = ((x - half_wide).floor(), (y - BADGE_RADIUS).floor());
+    let (right, bottom) = ((x + half_wide).ceil(), (y + BADGE_RADIUS).ceil());
+    (left as usize, top as usize, (right - left) as usize, (bottom - top) as usize)
+}
+
+/// How much of pixel (x, y) of a Swap Zone picture is badge, in sixteenths:
+/// the hexagon tried at 4 x 4 points in the pixel, which smooths its edge.
+fn badge_cover(x: usize, y: usize) -> u32 {
+    let (middle_x, middle_y) = BADGE_MIDDLE;
+    let inside = |at_x: f32, at_y: f32| {
+        let (across, down) = ((at_x - middle_x).abs(), (at_y - middle_y).abs());
+        across <= BADGE_RADIUS * 3f32.sqrt() / 2.0 && down + across / 3f32.sqrt() <= BADGE_RADIUS
+    };
+    let point = |n: u32| (n as f32 + 0.5) / 4.0;
+    (0..16).filter(|n| inside(x as f32 + point(n % 4), y as f32 + point(n / 4))).count() as u32
+}
+
 /// A picture's pixels as RGBA, top row first.
 fn upright(picture: &igz::Picture) -> Result<Vec<u8>, String> {
     let (width, height) = (picture.width, picture.height);
@@ -163,4 +249,20 @@ fn write(path: &Path, width: usize, height: usize, rgba: &[u8]) -> Result<(), St
     let mut writer = encoder.write_header().map_err(failed)?;
     writer.write_image_data(rgba).map_err(failed)?;
     writer.finish().map_err(failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_badge_is_cut_along_its_hexagon() {
+        assert_eq!(badge_box(), (47, 19, 107, 123));
+        assert_eq!(badge_cover(100, 80), 16); // the middle
+        assert_eq!(badge_cover(100, 10), 0); // above its top corner
+        assert_eq!(badge_cover(20, 80), 0); // left of it
+        assert_eq!(badge_cover(150, 25), 0); // past its top right side
+        // Its left side runs down x = 47.67, so the pixel at 47 is a quarter badge.
+        assert_eq!(badge_cover(47, 80), 4);
+    }
 }

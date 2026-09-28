@@ -18,8 +18,10 @@ omoio-portraits pictures <game.wua or game folder> <folder>
 ```
 
 `title` prints the game's title id. `pictures` writes one PNG per figure,
-named `<id>-<variant>.png` with the variant as four hex digits, and prints
-`progress <done> <of>` as it goes and `done <written>` at the end.
+named `<id>-<variant>.png` with the variant as four hex digits, the eight
+element symbols as `element-<name>.png`, and the Swap Zone badge of each way
+a swapper moves as `movement-<name>.png`. It prints `progress <done> <of>`
+as it goes and `done <written>` at the end.
 
 Only Skylanders SWAP Force is known so far.
 
