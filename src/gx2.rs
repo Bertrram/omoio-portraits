@@ -1,9 +1,11 @@
 //! The Wii U's graphics chip keeps a texture in tiles, not row by row. This
 //! puts the blocks of a DXT5 picture (128 bits each) back in rows. The chip
 //! belongs to AMD's R600 family, set up with 2 pipes, 4 banks and a 256-byte
-//! pipe interleave. A texture at least one macro tile big (32 x 16 blocks) is
-//! 2D tiled, a smaller one 1D tiled. Written from the family's addressing
-//! rules and checked by eye against the game's own pictures.
+//! pipe interleave. A texture is 2D tiled, padded out to whole macro tiles
+//! (32 x 16 blocks), or 1D tiled, padded to whole micro tiles (8 x 8); the
+//! game's own pictures show which by their size, a 120-pixel icon being 2D
+//! and a 160-pixel one 1D. Written from the family's addressing rules and
+//! checked by eye against the game's own pictures.
 
 const BLOCK_BYTES: usize = 16;
 const MICRO: usize = 8;
@@ -45,7 +47,8 @@ fn micro_tiled(x: usize, y: usize, pitch: usize) -> usize {
 /// The blocks of a tiled surface `wide` x `high` blocks, in rows. `None` when
 /// the data is too short for that size.
 pub fn untile(tiled: &[u8], wide: usize, high: usize) -> Option<Vec<u8>> {
-    let two_d = wide >= MACRO_WIDE && high >= MACRO_HIGH;
+    let padded_2d = wide.next_multiple_of(MACRO_WIDE) * high.next_multiple_of(MACRO_HIGH) * BLOCK_BYTES;
+    let two_d = tiled.len() >= padded_2d;
     let pitch = wide.next_multiple_of(if two_d { MACRO_WIDE } else { MICRO });
     let mut rows = vec![0; wide * high * BLOCK_BYTES];
     for y in 0..high {
@@ -97,5 +100,23 @@ mod tests {
     fn too_little_data_is_refused() {
         assert!(untile(&[0; 100], 64, 64).is_none());
         assert_eq!(untile(&vec![0; 64 * 64 * 16], 64, 64).map(|rows| rows.len()), Some(64 * 64 * 16));
+    }
+
+    #[test]
+    fn the_size_of_the_data_tells_the_layout() {
+        // A 120-pixel icon fills whole macro tiles once padded: 2D. A
+        // 160-pixel one is only big enough for micro tiles: 1D. The block at
+        // (8, 0) is kept at a different byte in each layout, so marking it
+        // there shows which one was read.
+        let marked = |at: usize, size: usize| {
+            let mut data = vec![0u8; size];
+            data[at..at + BLOCK_BYTES].fill(7);
+            data
+        };
+        assert_ne!(macro_tiled(8, 0, 32), micro_tiled(8, 0, 32));
+        let two_d = untile(&marked(macro_tiled(8, 0, 32), 32 * 32 * 16), 30, 30).unwrap();
+        assert_eq!(two_d[8 * BLOCK_BYTES], 7);
+        let one_d = untile(&marked(micro_tiled(8, 0, 40), 40 * 40 * 16), 40, 40).unwrap();
+        assert_eq!(one_d[8 * BLOCK_BYTES], 7);
     }
 }
