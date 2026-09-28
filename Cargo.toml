@@ -1,0 +1,19 @@
+[package]
+name = "omoio-portraits"
+version = "0.1.0"
+edition = "2021"
+description = "Reads the figure pictures out of the user's own copy of Skylanders SWAP Force, for Omoio's portal menu."
+publish = false
+
+[dependencies]
+# Cemu's .wua keeps the game's files in zstd blocks.
+zstd = "0.13"
+# The game's own archives store files as raw deflate.
+flate2 = "1"
+# The pictures are written as PNG for Omoio to show.
+png = "0.18"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
