@@ -1,6 +1,6 @@
 //! Reads the figure pictures out of the user's own copy of Skylanders SWAP
-//! Force, for Omoio's portal menu. Omoio downloads this program only when
-//! the user asks for the pictures, and runs it two ways:
+//! Force or Trap Team, for Omoio's portal menu. Omoio downloads this program
+//! only when the user asks for the pictures, and runs it two ways:
 //!
 //!     omoio-portraits title <game.wua>
 //!     omoio-portraits pictures <game.wua or unpacked game folder> <folder>
@@ -10,8 +10,11 @@
 //! up, named `<id>-<variant>.png` with the variant as four hex digits, the
 //! game's eight element symbols as white shapes, `element-<name>.png`, for
 //! Omoio to colour, and the badges of the eight ways a swapper moves,
-//! `movement-<name>.png`. It prints `progress <done> <of>` as it goes and
-//! `done <written>` at the end.
+//! `movement-<name>.png`. From Trap Team it writes every figure and trap as
+//! its Collection screen shows them, with the same names, and each villain
+//! in a trap and out of one, `villain-<number>.png` and
+//! `villain-<number>-loose.png`. It prints `progress <done> <of>` as it goes
+//! and `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
 
 mod dxt5;
@@ -26,6 +29,15 @@ use std::process::ExitCode;
 
 /// The archive in SWAP Force that holds every figure's portrait.
 const PORTRAITS: &str = "content/archives/characterillustrations.pak";
+/// Trap Team's pictures, each in the archive of the screen that shows them:
+/// the Collection screen's figures, its traps, and the Villain Vault.
+const TRAP_TEAM: [&str; 3] = [
+    "content/misc/UI_Collection_Champions.arc",
+    "content/misc/ui_collection_traps.arc",
+    "content/misc/ui_villainvault_stream.arc",
+];
+const NOT_KNOWN_GAME: &str =
+    "This game has no figure pictures Omoio can read yet. So far that is Skylanders SWAP Force and Trap Team.";
 /// The archive with the town's elemental stones, whose texture has the eight
 /// element symbols as white shapes, four across and two down, in this order
 /// (checked by eye).
@@ -108,10 +120,17 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
     archive.files.iter().filter(|file| file.name.starts_with("textures\\")).collect()
 }
 
+/// Tells the game by its files rather than its title id, so every region's
+/// copy of it is read the same way.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
-    let bytes = game_file(game, PORTRAITS)?
-        .ok_or("This game has no figure pictures Omoio can read yet. So far that is Skylanders SWAP Force.")?;
-    let archive = pak::open(&bytes)?;
+    match game_file(game, PORTRAITS)? {
+        Some(bytes) => swap_force(game, &bytes, folder),
+        None => trap_team(game, folder),
+    }
+}
+
+fn swap_force(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String> {
+    let archive = pak::open(bytes)?;
     std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
     let portraits = textures(&archive);
     // The element symbols and the movement badges come last, a step each.
@@ -135,6 +154,38 @@ fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     written += symbols(game, folder)?;
     println!("progress {} {steps}", portraits.len() + 1);
     written += movements(game, folder)?;
+    println!("progress {steps} {steps}");
+    Ok(written)
+}
+
+fn trap_team(game: &Path, folder: &Path) -> Result<usize, String> {
+    let mut archives = Vec::new();
+    for inside in TRAP_TEAM {
+        archives.push(game_file(game, inside)?.ok_or(NOT_KNOWN_GAME)?);
+    }
+    // Each archive borrows the bytes read above, so those stay alive in
+    // `archives` while the pictures are read out of them.
+    let archives = archives.iter().map(|bytes| pak::open(bytes)).collect::<Result<Vec<_>, _>>()?;
+    let wanted: Vec<_> = archives
+        .iter()
+        .flat_map(|archive| {
+            archive.files.iter().filter_map(move |file| names::trap_team(&file.name).map(|name| (archive, file, name)))
+        })
+        .collect();
+    std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
+    let steps = wanted.len();
+    let mut written = 0;
+    for (done, (archive, file, name)) in wanted.iter().enumerate() {
+        println!("progress {done} {steps}");
+        let Some(picture) = igz::read(&archive.read(file)?) else {
+            continue;
+        };
+        if picture.format != DXT5_TILED {
+            continue;
+        }
+        write(&folder.join(format!("{name}.png")), picture.width, picture.height, &upright(&picture)?)?;
+        written += 1;
+    }
     println!("progress {steps} {steps}");
     Ok(written)
 }
@@ -234,10 +285,13 @@ fn badge_cover(x: usize, y: usize) -> u32 {
 /// A picture's pixels as RGBA, top row first.
 fn upright(picture: &igz::Picture) -> Result<Vec<u8>, String> {
     let (width, height) = (picture.width, picture.height);
-    let blocks = gx2::untile(&picture.pixels, width / 4, height / 4).ok_or("A picture in the game is shorter than its size says.")?;
-    let rows = dxt5::decode(&blocks, width, height);
+    // A side that isn't a multiple of 4 is stored as whole blocks; the
+    // pixels past it are cut off once decoded. Trap Team's villains are 171.
+    let (wide, high) = (width.div_ceil(4), height.div_ceil(4));
+    let blocks = gx2::untile(&picture.pixels, wide, high).ok_or("A picture in the game is shorter than its size says.")?;
+    let rows = dxt5::decode(&blocks, wide * 4, high * 4);
     // The game keeps its pictures bottom row first.
-    Ok(rows.chunks(width * 4).rev().flatten().copied().collect())
+    Ok(rows.chunks(wide * 16).take(height).rev().flat_map(|row| &row[..width * 4]).copied().collect())
 }
 
 fn write(path: &Path, width: usize, height: usize, rgba: &[u8]) -> Result<(), String> {

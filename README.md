@@ -1,6 +1,7 @@
 # omoio-portraits
 
-Reads the figure pictures out of your own copy of Skylanders SWAP Force, so
+Reads the figure pictures out of your own copy of Skylanders SWAP Force or
+Trap Team, so
 [Omoio](https://github.com/Bertrram/omoio)'s portal menu can show each figure
 as the game draws it. Omoio downloads this program only when you ask for the
 pictures, and checks it against a fingerprint before it runs.
@@ -18,12 +19,15 @@ omoio-portraits pictures <game.wua or game folder> <folder>
 ```
 
 `title` prints the game's title id. `pictures` writes one PNG per figure,
-named `<id>-<variant>.png` with the variant as four hex digits, the eight
-element symbols as `element-<name>.png`, and the Swap Zone badge of each way
-a swapper moves as `movement-<name>.png`. It prints `progress <done> <of>`
+named `<id>-<variant>.png` with the variant as four hex digits. From SWAP
+Force it also writes the eight element symbols as `element-<name>.png` and
+the Swap Zone badge of each way a swapper moves as `movement-<name>.png`.
+From Trap Team it writes every trap the same way as the figures, and each
+villain as the Villain Vault shows it, in a trap (`villain-<number>.png`) and
+out of one (`villain-<number>-loose.png`). It prints `progress <done> <of>`
 as it goes and `done <written>` at the end.
 
-Only Skylanders SWAP Force is known so far.
+SWAP Force and Trap Team are known so far.
 
 ## Build
 

@@ -201,9 +201,51 @@ pub fn figure(source: &str) -> Option<(u16, u16)> {
         .or_else(|| swapper("Legs_").map(|at| (BOTTOMS + at, 0)))
 }
 
+/// The file Omoio wants for one of Trap Team's pictures, from the name the
+/// game's archive gives it. Figures and traps are named by id and variant,
+/// the variant in decimal (`.../skylander_toys/2014/<group>/462_12288_snapshot.png/<hash>.igz`,
+/// `.../traps/square/217_12291.png/...`), and become `<id>-<variant>` as for
+/// SWAP Force. A villain is numbered (`.../villains/captured/1001_villaincaptured.png/...`)
+/// and becomes `villain-<number>`, or `villain-<number>-loose` for the
+/// picture the game shows of one out of a trap.
+pub fn trap_team(path: &str) -> Option<String> {
+    let mut parts = path.rsplit('/');
+    parts.next()?;
+    let picture = parts.next()?.strip_suffix(".png")?;
+    let folder = parts.next()?;
+    let number = |ending: &str| picture.strip_suffix(ending)?.parse::<u16>().ok();
+    match folder {
+        "captured" => number("_villaincaptured").map(|n| format!("villain-{n}")),
+        "escaped" => number("_villainescaped").map(|n| format!("villain-{n}-loose")),
+        _ if path.contains("/skylander_toys/") || path.contains("/traps/square/") => {
+            let mut fields = picture.split('_');
+            let id: u16 = fields.next()?.parse().ok()?;
+            let variant: u16 = fields.next()?.parse().ok()?;
+            Some(format!("{id}-{variant:04x}"))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trap_team_pictures_are_told_by_their_archive_names() {
+        let named = |path: &str| trap_team(path);
+        assert_eq!(
+            named("C:/tfb/build/wiiu/ui_sky4/collection_images/skylander_toys/2014/2014_skylanders_regular/462_12288_snapshot.png/0x1.png.igb.tex.igz"),
+            Some("462-3000".to_string())
+        );
+        assert_eq!(named("x/ui_sky4/collection_images/skylander_toys/2011/2011_skylanders/16_0_spyro.png/0x2.igz"), Some("16-0000".to_string()));
+        assert_eq!(named("x/ui_sky4/collection_images/traps/square/217_12291.png/0x3.igz"), Some("217-3003".to_string()));
+        assert_eq!(named("x/collection_images/villains/captured/1001_villaincaptured.png/0x4.igz"), Some("villain-1001".to_string()));
+        assert_eq!(named("x/collection_images/villains/escaped/1046_villainescaped.png/0x5.igz"), Some("villain-1046-loose".to_string()));
+        assert_eq!(named("x/ui_sky4/collection_images/traps/square/square_highlight.png/0x6.igz"), None);
+        assert_eq!(named("x/ui_sky4/trappersight/png/elementalvignette_life_left.png/0x7.igz"), None);
+        assert_eq!(named("c:/tfb/build/wiiu/levels/criminal_audio_sky4/x.wav/0x8.wav.hz.wav.enc"), None);
+    }
 
     #[test]
     fn pictures_are_told_by_their_names() {
