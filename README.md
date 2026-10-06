@@ -21,8 +21,9 @@ omoio-portraits pictures <game.wua or game folder> <folder>
 `title` prints the game's title id, a PS3 game's from its `PARAM.SFO`.
 `pictures` writes one PNG per figure, named `<id>-<variant>.png` with the
 variant as four hex digits. From Giants it writes every figure, magic item
-and sidekick its Collection screen shows, and the eight element symbols as
-`element-<name>.png`. From SWAP Force it also writes the element symbols and
+and sidekick its Collection screen shows, the eight element symbols as
+`element-<name>.png`, and the badge it shows for a Giant as
+`class-giant.png`. From SWAP Force it also writes the element symbols and
 the Swap Zone badge of each way a swapper moves as `movement-<name>.png`.
 From Trap Team it writes every trap the same way as the figures, and each
 villain as the Villain Vault shows it, in a trap (`villain-<number>.png`) and

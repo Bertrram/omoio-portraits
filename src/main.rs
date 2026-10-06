@@ -16,8 +16,8 @@
 //! names, and each villain in a trap and out of one, `villain-<number>.png`
 //! and `villain-<number>-loose.png`. From Giants, a PS3 game folder, it
 //! writes every figure, magic item and sidekick its Collection screen shows,
-//! and its element symbols. It prints `progress <done> <of>` as it goes and
-//! `done <written>` at the end.
+//! its element symbols, and its badge for a Giant, `class-giant.png`. It
+//! prints `progress <done> <of>` as it goes and `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
 
 mod dxt5;
@@ -27,7 +27,7 @@ mod names;
 mod pak;
 mod wua;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// The archive in SWAP Force that holds every figure's portrait.
@@ -45,6 +45,14 @@ const TRAP_TEAM: [&str; 3] = [
 /// are its words in each language.
 const GIANTS: &str = "PS3_GAME/USRDIR/misc/ui_collection_champions.bld";
 const GIANTS_SYMBOLS: &str = "PS3_GAME/USRDIR/misc/ui_cardgame_handselect_streaming.bld";
+/// Giants' badge for a Giant, a horned head on a disc, is in none of its
+/// menu screens but in the screens of its levels, so it is read from the
+/// hub's level, or failing that from any level that has it.
+const GIANTS_LEVELS: &str = "PS3_GAME/USRDIR/level";
+const GIANTS_HUB: &str = "level_008_islandtown.bld";
+const GIANT_BADGE: &str = "icon_giant";
+/// The badge is 512 pixels square; Omoio shows it far smaller than that.
+const BADGE_SIDE: usize = 128;
 const SCREEN: &str = "level.bld";
 /// Giants' element symbols are named `<element>_glass256`.
 const GLASS_SYMBOL: &str = "_glass256";
@@ -256,8 +264,8 @@ fn trap_team(game: &Path, folder: &Path) -> Result<usize, String> {
 fn giants(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String> {
     let pictures = screen_pictures(bytes)?;
     std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
-    // The element symbols come last, a step of their own.
-    let steps = pictures.len() + 1;
+    // The element symbols and the Giant badge come last, a step each.
+    let steps = pictures.len() + 2;
     let mut written = 0;
     for (done, picture) in pictures.iter().enumerate() {
         println!("progress {done} {steps}");
@@ -272,6 +280,8 @@ fn giants(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String> {
     }
     println!("progress {} {steps}", pictures.len());
     written += giants_symbols(game, folder)?;
+    println!("progress {} {steps}", pictures.len() + 1);
+    written += giant_badge(game, folder)?;
     println!("progress {steps} {steps}");
     Ok(written)
 }
@@ -311,6 +321,68 @@ fn solid(rgba: &mut [u8]) {
         let alpha = (u32::from(pixel[3]).saturating_sub(GLOW) * 255 / (GLASS - GLOW)).min(255);
         pixel.copy_from_slice(&[255, 255, 255, alpha as u8]);
     }
+}
+
+/// Giants' badge for a Giant, written as `class-giant.png`, 128 pixels
+/// square. A copy without it just has none.
+fn giant_badge(game: &Path, folder: &Path) -> Result<usize, String> {
+    let levels = game_folder(game).join(GIANTS_LEVELS);
+    let mut others: Vec<PathBuf> = std::fs::read_dir(&levels)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    others.retain(|path| {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        name.to_ascii_lowercase().ends_with(".bld") && !name.eq_ignore_ascii_case(GIANTS_HUB)
+    });
+    others.sort();
+    for archive in std::iter::once(levels.join(GIANTS_HUB)).chain(others) {
+        let Ok(bytes) = std::fs::read(&archive) else {
+            continue;
+        };
+        // A level whose screen doesn't read is passed over like one without
+        // the badge; another level may still have it.
+        let Ok(pictures) = screen_pictures(&bytes) else {
+            continue;
+        };
+        let found = pictures.iter().find(|picture| picture.source == GIANT_BADGE && DXT5_PS3.contains(&picture.format));
+        let Some(badge) = found else {
+            continue;
+        };
+        let small = shrink(&upright(badge)?, badge.width, badge.height, BADGE_SIDE);
+        write(&folder.join("class-giant.png"), BADGE_SIDE, BADGE_SIDE, &small)?;
+        return Ok(1);
+    }
+    Ok(0)
+}
+
+/// A picture shrunk to `side` pixels square, each pixel the average of the
+/// ones it covers. Colour is weighted by alpha, so the clear pixels around
+/// a shape don't darken its edge.
+fn shrink(rgba: &[u8], width: usize, height: usize, side: usize) -> Vec<u8> {
+    let span = |at: usize, whole: usize| {
+        let start = at * whole / side;
+        start..((at + 1) * whole / side).max(start + 1)
+    };
+    let mut out = Vec::with_capacity(side * side * 4);
+    for y in 0..side {
+        for x in 0..side {
+            let (rows, columns) = (span(y, height), span(x, width));
+            let count = (rows.len() * columns.len()) as u64;
+            let mut sum = [0u64; 4];
+            for row in rows {
+                for pixel in rgba[(row * width + columns.start) * 4..(row * width + columns.end) * 4].chunks_exact(4) {
+                    let alpha = u64::from(pixel[3]);
+                    for channel in 0..3 {
+                        sum[channel] += u64::from(pixel[channel]) * alpha;
+                    }
+                    sum[3] += alpha;
+                }
+            }
+            let colour = |channel: usize| (sum[channel] + sum[3] / 2).checked_div(sum[3]).unwrap_or(0) as u8;
+            out.extend_from_slice(&[colour(0), colour(1), colour(2), ((sum[3] + count / 2) / count) as u8]);
+        }
+    }
+    out
 }
 
 /// The eight element symbols, written as `element-<name>.png`. A game
@@ -453,6 +525,26 @@ mod tests {
         let mut pixels = [9, 9, 9, 0, 200, 100, 50, 64, 30, 30, 30, 120, 255, 255, 255, 176, 1, 2, 3, 255];
         solid(&mut pixels);
         assert_eq!(pixels, [255, 255, 255, 0, 255, 255, 255, 0, 255, 255, 255, 127, 255, 255, 255, 255, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_shrunk_picture_averages_what_each_pixel_covers() {
+        // Four square to two square: the top left pixel covers a red pixel,
+        // a darker red one and two clear ones, which add cover but no colour.
+        let red = [200, 0, 0, 255];
+        let dark = [100, 0, 0, 255];
+        let clear = [9, 9, 9, 0];
+        let green = [0, 255, 0, 255];
+        let rows = [
+            [red, dark, green, green],
+            [clear, clear, green, green],
+            [clear, clear, clear, clear],
+            [clear, clear, clear, clear],
+        ]
+        .concat()
+        .concat();
+        let top = [150, 0, 0, 128, 0, 255, 0, 255];
+        assert_eq!(shrink(&rows, 4, 4, 2), [top, [0; 8]].concat());
     }
 
     /// A PARAM.SFO holding `entries`, laid out as a PS3 game's.
