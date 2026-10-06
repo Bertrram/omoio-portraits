@@ -11,17 +11,31 @@
 //! little-endian: the descriptor's offset moves to its first word and the
 //! names' offset to 0x28. Every picture in it is stored whole; its packed
 //! files use another scheme, which nothing here needs.
+//!
+//! Skylanders Giants on the PS3 (.arc and .bld) writes version 8, also
+//! little-endian, with the names' offset at 0x1C, the checksums from 0x34
+//! and descriptors of 12 bytes: offset, size and mode. Its .bld archives
+//! pack their files with LZMA, in chunks laid out as SWAP Force's are; a
+//! packed chunk's stream starts with the coder's five bytes of settings,
+//! which its length leaves out.
 
 use flate2::read::DeflateDecoder;
+use lzma_rust2::LzmaReader;
 use std::io::Read;
 
 const MAGIC: u32 = 0x1a41_4749;
+const GIANTS: u32 = 0x08;
 const SWAP_FORCE: u32 = 0x0a;
 const TRAP_TEAM: u32 = 0x0b;
 const CHUNK: usize = 0x8000;
 const DESCRIPTORS: usize = 0x38;
+const GIANTS_DESCRIPTORS: usize = 0x34;
 const STORED: u32 = 0xff;
 const DEFLATED: [u32; 2] = [0x00, 0x10];
+const LZMA: u32 = 0x20;
+/// The settings Giants packs every chunk with: lc 3, lp 0 and pb 2, and a
+/// dictionary as big as a chunk.
+const LZMA_SETTINGS: [u8; 5] = [0x5d, 0x00, 0x80, 0x00, 0x00];
 
 pub struct Pak<'a> {
     bytes: &'a [u8],
@@ -49,31 +63,40 @@ fn not_known() -> String {
 }
 
 pub fn open(bytes: &[u8]) -> Result<Pak<'_>, String> {
-    // Which way round the numbers are, where the names start, and where in a
-    // descriptor the file's offset is.
-    let (word, names_at, offset_at): (fn(&[u8], usize) -> Option<usize>, usize, usize) =
-        if be32(bytes, 0) == Some(MAGIC as usize) && be32(bytes, 4) == Some(SWAP_FORCE as usize) {
-            (be32, 0x2c, 4)
-        } else if le32(bytes, 0) == Some(MAGIC as usize) && le32(bytes, 4) == Some(TRAP_TEAM as usize) {
-            (le32, 0x28, 0)
-        } else {
-            return Err(not_known());
-        };
+    let little = le32(bytes, 0) == Some(MAGIC as usize);
+    // Which way round the numbers are, where the names start, where the
+    // checksums start, how long a descriptor is, and where in one the file's
+    // offset, size and mode are.
+    let (word, names_at, checksums, descriptor, [offset_at, size_at, mode_at]): (
+        fn(&[u8], usize) -> Option<usize>,
+        usize,
+        usize,
+        usize,
+        [usize; 3],
+    ) = if be32(bytes, 0) == Some(MAGIC as usize) && be32(bytes, 4) == Some(SWAP_FORCE as usize) {
+        (be32, 0x2c, DESCRIPTORS, 16, [4, 8, 12])
+    } else if little && le32(bytes, 4) == Some(TRAP_TEAM as usize) {
+        (le32, 0x28, DESCRIPTORS, 16, [0, 8, 12])
+    } else if little && le32(bytes, 4) == Some(GIANTS as usize) {
+        (le32, 0x1c, GIANTS_DESCRIPTORS, 12, [0, 4, 8])
+    } else {
+        return Err(not_known());
+    };
     let count = word(bytes, 0x0c).ok_or_else(not_known)?;
     let align = word(bytes, 0x10).ok_or_else(not_known)?.max(1);
     let names = word(bytes, names_at).ok_or_else(not_known)?;
     // Each file has a four-byte checksum before the descriptors start.
-    let descriptors = DESCRIPTORS + count * 4;
+    let descriptors = checksums + count * 4;
     let files = (0..count)
         .map(|index| {
-            let at = descriptors + index * 16;
+            let at = descriptors + index * descriptor;
             let name_at = names + word(bytes, names + index * 4)?;
             let length = bytes.get(name_at..)?.iter().position(|&b| b == 0)?;
             Some(PakFile {
                 name: String::from_utf8_lossy(&bytes[name_at..name_at + length]).into_owned(),
                 offset: word(bytes, at + offset_at)?,
-                size: word(bytes, at + 8)?,
-                mode: word(bytes, at + 12)? as u32,
+                size: word(bytes, at + size_at)?,
+                mode: word(bytes, at + mode_at)? as u32,
             })
         })
         .collect::<Option<Vec<_>>>()
@@ -91,9 +114,13 @@ impl Pak<'_> {
                 .map(<[u8]>::to_vec)
                 .ok_or_else(not_known);
         }
-        if !DEFLATED.contains(&kind) {
+        let unpack = if DEFLATED.contains(&kind) {
+            inflate
+        } else if kind == LZMA {
+            unlzma
+        } else {
             return Err(not_known());
-        }
+        };
         let mut out = Vec::with_capacity(file.size);
         let mut at = file.offset;
         while out.len() < file.size {
@@ -102,15 +129,19 @@ impl Pak<'_> {
                 .get(at..at + 2)
                 .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
                 .ok_or_else(not_known)?;
-            let packed = self.bytes.get(at + 2..at + 2 + length).unwrap_or(&[]);
-            let mut chunk = Vec::with_capacity(CHUNK);
-            if !packed.is_empty() && DeflateDecoder::new(packed).read_to_end(&mut chunk).is_ok() {
-                at += 2 + length;
-            } else {
-                let end = (at + CHUNK).min(self.bytes.len());
-                chunk = self.bytes[at..end].to_vec();
-                at = end;
-            }
+            let size = (file.size - out.len()).min(CHUNK);
+            let chunk = match unpack(self.bytes.get(at + 2..).unwrap_or(&[]), length, size) {
+                Some((chunk, used)) => {
+                    at += 2 + used;
+                    chunk
+                }
+                None => {
+                    let end = (at + CHUNK).min(self.bytes.len());
+                    let chunk = self.bytes[at..end].to_vec();
+                    at = end;
+                    chunk
+                }
+            };
             if chunk.is_empty() {
                 return Err(not_known());
             }
@@ -122,11 +153,33 @@ impl Pak<'_> {
     }
 }
 
+/// The deflated chunk at the start of `packed`, `length` long, and how many
+/// bytes it took. `None` when it isn't one.
+fn inflate(packed: &[u8], length: usize, size: usize) -> Option<(Vec<u8>, usize)> {
+    let packed = packed.get(..length).filter(|packed| !packed.is_empty())?;
+    let mut chunk = Vec::with_capacity(size);
+    DeflateDecoder::new(packed).read_to_end(&mut chunk).ok()?;
+    Some((chunk, length))
+}
+
+/// The chunk packed with LZMA at the start of `packed`, `size` bytes once
+/// unpacked: the settings, then a stream `length` long. Returns it and how
+/// many bytes it took, or `None` when no settings lead it.
+fn unlzma(packed: &[u8], length: usize, size: usize) -> Option<(Vec<u8>, usize)> {
+    let stream = packed.strip_prefix(&LZMA_SETTINGS)?.get(..length)?;
+    let dictionary = u32::from_le_bytes(LZMA_SETTINGS[1..].try_into().unwrap());
+    let mut reader = LzmaReader::new_with_props(stream, size as u64, LZMA_SETTINGS[0], dictionary, None).ok()?;
+    let mut chunk = vec![0; size];
+    reader.read_exact(&mut chunk).ok()?;
+    Some((chunk, LZMA_SETTINGS.len() + length))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use flate2::write::DeflateEncoder;
     use flate2::Compression;
+    use lzma_rust2::{LzmaOptions, LzmaWriter};
     use std::io::Write;
 
     /// An archive of one file, `data`, deflated in chunks as the game does.
@@ -207,6 +260,72 @@ mod tests {
             out[at + 12..at + 16].copy_from_slice(&u32::MAX.to_le_bytes());
         }
         out
+    }
+
+    /// A Giants archive laid out as the game's are, with `packed` packed in
+    /// LZMA chunks, all but its second, which is left whole as a chunk that
+    /// didn't shrink is, and `whole` stored as it is.
+    fn build_giants(packed: &[u8], whole: &[u8]) -> Vec<u8> {
+        let align = 0x800;
+        let mut out = vec![0; GIANTS_DESCRIPTORS + 2 * 16];
+        out[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        out[4..8].copy_from_slice(&GIANTS.to_le_bytes());
+        out[0x0c..0x10].copy_from_slice(&2u32.to_le_bytes());
+        out[0x10..0x14].copy_from_slice(&(align as u32).to_le_bytes());
+        out.resize(out.len().div_ceil(align) * align, 0);
+        let first = out.len();
+        let mut options = LzmaOptions::with_preset(6);
+        options.dict_size = CHUNK as u32;
+        for (index, chunk) in packed.chunks(CHUNK).enumerate() {
+            if index == 1 {
+                out.extend_from_slice(chunk);
+            } else {
+                let mut writer = LzmaWriter::new_no_header(Vec::new(), &options, false).unwrap();
+                writer.write_all(chunk).unwrap();
+                let stream = writer.finish().unwrap();
+                out.extend_from_slice(&(stream.len() as u16).to_le_bytes());
+                out.extend_from_slice(&LZMA_SETTINGS);
+                out.extend_from_slice(&stream);
+            }
+            out.resize(out.len().div_ceil(align) * align, 0);
+        }
+        let second = out.len();
+        out.extend_from_slice(whole);
+        let names = out.len();
+        out[0x1c..0x20].copy_from_slice(&(names as u32).to_le_bytes());
+        // As in the game, each name is followed by four more bytes, which
+        // nothing here reads.
+        out.extend_from_slice(&8u32.to_le_bytes());
+        out.extend_from_slice(&22u32.to_le_bytes());
+        out.extend_from_slice(b"level.bld\0\x86\x9a\xb7\x17ENGLISH.pak\0\x86\x9a\xb7\x17");
+        let files = [(first, packed.len(), 0x2000_0000), (second, whole.len(), u32::MAX)];
+        for (index, (offset, size, mode)) in files.into_iter().enumerate() {
+            let at = GIANTS_DESCRIPTORS + 2 * 4 + index * 12;
+            out[at..at + 4].copy_from_slice(&(offset as u32).to_le_bytes());
+            out[at + 4..at + 8].copy_from_slice(&(size as u32).to_le_bytes());
+            out[at + 8..at + 12].copy_from_slice(&mode.to_le_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn a_giants_archive_unpacks_its_lzma_chunks() {
+        let mut seed = 0x2545_f491_u32;
+        let mut packed: Vec<u8> = (0..CHUNK).map(|i| (i % 97) as u8).collect();
+        packed.extend((0..CHUNK).map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as u8
+        }));
+        packed.extend((0..5000).map(|i| (i % 13) as u8));
+        let bytes = build_giants(&packed, b"IGZ\x01 stored whole");
+        let pak = open(&bytes).unwrap();
+        assert_eq!(pak.files.len(), 2);
+        assert_eq!(pak.files[0].name, "level.bld");
+        assert_eq!(pak.files[1].name, "ENGLISH.pak");
+        assert_eq!(pak.read(&pak.files[0]).unwrap(), packed);
+        assert_eq!(pak.read(&pak.files[1]).unwrap(), b"IGZ\x01 stored whole");
     }
 
     #[test]

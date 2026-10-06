@@ -10,8 +10,15 @@ publish = false
 zstd = "0.13"
 # The game's own archives store files as raw deflate.
 flate2 = "1"
+# Skylanders Giants on the PS3 packs its archives with LZMA instead. Its
+# default features add other formats and unsafe speed-ups, none needed here.
+lzma-rust2 = { version = "0.20", default-features = false, features = ["std"] }
 # The pictures are written as PNG for Omoio to show.
 png = "0.18"
+
+[dev-dependencies]
+# The tests pack chunks the way Giants does, to read them back.
+lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "encoder"] }
 
 [profile.release]
 lto = true
