@@ -8,11 +8,34 @@
 //! Skylanders Trap Team writes version 8: the same section list, but three
 //! sections, the object being the second, with the size at 0xC0 in it, and
 //! no table of strings. Its pictures are named by the archive instead.
+//!
+//! Skylanders Giants on the PS3 writes version 6, which keeps a whole screen
+//! in one file: its objects in one section, the pixels of all its pictures
+//! in another, and its strings in the last. The sections are listed from
+//! 0x10, the first holding numbered tables. A pointer gives the section in
+//! its top byte, counting from the objects', and the offset in the rest.
+//! Table 0 names the kinds of object, 2 lists outside things by a pair of
+//! hashes, the name's first, 5 says where each object starts, and 10 lists
+//! blocks of memory, a size and a pointer each. A picture, `igImage2`, keeps
+//! its name at 0x08, its size at 0x30, its pixel format at 0x3C, as a number
+//! in table 2, and its pixels at 0x48, as a number in table 10. Worked out
+//! from the game's files.
 
 const MAGIC: u32 = 0x4947_5a01;
+const GIANTS: u32 = 6;
 const SWAP_FORCE: u32 = 7;
 const TRAP_TEAM: u32 = 8;
 const SECTIONS: usize = 0x18;
+const GIANTS_SECTIONS: usize = 0x10;
+const KINDS: u32 = 0;
+const OUTSIDE_THINGS: u32 = 2;
+const OBJECTS: u32 = 5;
+const MEMORY: u32 = 10;
+const PICTURE: &[u8] = b"igImage2";
+const PICTURE_NAME: usize = 0x08;
+const PICTURE_SIZE: usize = 0x30;
+const PICTURE_FORMAT: usize = 0x3c;
+const PICTURE_PIXELS: usize = 0x48;
 /// The table names are four letters stored back to front: "TSTR" is the
 /// table of strings, "EXID" the list of outside things, the pixel format
 /// first.
@@ -24,8 +47,8 @@ const SWAP_FORCE_OBJECT: (usize, usize) = (2, 0x40);
 const TRAP_TEAM_OBJECT: (usize, usize) = (1, 0xc0);
 
 pub struct Picture {
-    /// The file it was made from, such as `Spyro2012_WiiPortrait`. Empty
-    /// for Trap Team, which doesn't keep it.
+    /// The file it was made from, such as `Spyro2012_WiiPortrait`, or
+    /// `airdragon` in Giants. Empty for Trap Team, which doesn't keep it.
     pub source: String,
     pub format: u32,
     pub width: usize,
@@ -91,16 +114,122 @@ pub fn read(bytes: &[u8]) -> Option<Picture> {
     }
     // The strings table gives the whole path the picture was made from.
     let path = source.unwrap_or_default();
-    let name = path.rsplit('\\').next().unwrap_or_default();
-    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
 
     Some(Picture {
-        source: stem.to_string(),
+        source: stem(&path).to_string(),
         format: format?,
         width: be16(bytes, object.offset + size_in_object)?,
         height: be16(bytes, object.offset + size_in_object + 2)?,
         pixels: bytes.get(pixels.offset + pixels.align..pixels.offset + pixels.size)?.to_vec(),
     })
+}
+
+/// A path's file name without its folders and extension.
+fn stem(path: &str) -> &str {
+    let name = path.rsplit(['\\', '/']).next().unwrap_or_default();
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+}
+
+/// The text a pointer leads to, up to its end.
+fn text(bytes: &[u8], at: usize) -> Option<&str> {
+    let text = bytes.get(at..)?;
+    std::str::from_utf8(&text[..text.iter().position(|&b| b == 0)?]).ok()
+}
+
+/// Where each object starts in its section, from Giants' table 5. Each start
+/// is the one before plus four, plus four times a number written three bits
+/// to a nibble, low nibble first, with a nibble's top bit saying another
+/// follows. Counting from 0, the first object starts at 4 or later, as a
+/// pointer of 0 means none.
+fn object_starts(packed: &[u8], count: usize) -> Option<Vec<usize>> {
+    let mut nibbles = packed.iter().flat_map(|&byte| [byte & 15, byte >> 4]);
+    let mut at = 0;
+    (0..count)
+        .map(|_| {
+            let (mut fours, mut shift) = (0, 0);
+            loop {
+                let nibble = nibbles.next()?;
+                fours |= usize::from(nibble & 7) << shift;
+                shift += 3;
+                if nibble & 8 == 0 {
+                    break;
+                }
+            }
+            at += fours * 4 + 4;
+            Some(at)
+        })
+        .collect()
+}
+
+/// Every picture in one of Giants' screens, which the game keeps whole in
+/// one file. `None` when the file isn't one; pictures that don't read are
+/// left out.
+pub fn screen(bytes: &[u8]) -> Option<Vec<Picture>> {
+    if be32(bytes, 0)? != MAGIC || be32(bytes, 4)? != GIANTS {
+        return None;
+    }
+    let mut sections = Vec::new();
+    let mut at = GIANTS_SECTIONS;
+    while be32(bytes, at)? != 0 {
+        sections.push(be32(bytes, at)? as usize);
+        at += 16;
+    }
+    let (&tables, pools) = sections.split_first()?;
+    let pointer = |value: u32| Some(pools.get(value as usize >> 24)? + (value as usize & 0xff_ffff));
+    // Each table: its number, two words, how many entries it has, its
+    // length, and where in it they start.
+    let table = |number: u32| {
+        let mut at = tables + be32(bytes, tables + 0x14)? as usize;
+        for _ in 0..be32(bytes, tables + 0x10)? {
+            if be32(bytes, at)? == number {
+                return Some((at + be32(bytes, at + 20)? as usize, be32(bytes, at + 12)? as usize));
+            }
+            at += be32(bytes, at + 16)? as usize;
+        }
+        None
+    };
+
+    let (names, kinds) = table(KINDS)?;
+    let mut at = names;
+    let mut picture_kind = None;
+    for kind in 0..kinds as u32 {
+        let name = bytes.get(at..)?.split(|&b| b == 0).next()?;
+        if name == PICTURE {
+            picture_kind = Some(kind);
+            break;
+        }
+        at += name.len() + 1;
+    }
+    let Some(picture_kind) = picture_kind else {
+        return Some(Vec::new());
+    };
+    let (packed, count) = table(OBJECTS)?;
+    let starts = object_starts(bytes.get(packed..)?, count)?;
+    let (outside, _) = table(OUTSIDE_THINGS)?;
+    let (memory, _) = table(MEMORY)?;
+    let objects = *pools.first()?;
+    let picture = |object: usize| {
+        let name = text(bytes, pointer(be32(bytes, object + PICTURE_NAME)?)?)?;
+        let format = be32(bytes, outside + (be32(bytes, object + PICTURE_FORMAT)? as usize & 0xff_ffff) * 8)?;
+        let block = memory + be32(bytes, object + PICTURE_PIXELS)? as usize * 8;
+        let start = pointer(be32(bytes, block + 4)?)?;
+        let length = be32(bytes, block)? as usize & 0xff_ffff;
+        Some(Picture {
+            source: stem(name).to_string(),
+            format,
+            width: be16(bytes, object + PICTURE_SIZE)?,
+            height: be16(bytes, object + PICTURE_SIZE + 2)?,
+            pixels: bytes.get(start..start + length)?.to_vec(),
+        })
+    };
+    Some(
+        starts
+            .into_iter()
+            .map(|start| objects + start)
+            .filter(|&object| be32(bytes, object) == Some(picture_kind))
+            .filter_map(picture)
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -186,5 +315,82 @@ mod tests {
     fn other_files_are_not_pictures() {
         assert!(read(b"IGA\x1a nothing like a picture").is_none());
         assert!(read(&[0; 16]).is_none());
+        assert!(screen(b"IGA\x1a nothing like a screen").is_none());
+    }
+
+    #[test]
+    fn objects_start_where_giants_says() {
+        // The first bytes of the list in the game's Collection screen, whose
+        // first objects are a list at 4 and others at 0x3F4, 0x410 and 0x434.
+        assert_eq!(object_starts(&[0xb0, 0x3f, 0x86, 0x61], 4), Some(vec![4, 0x3f4, 0x410, 0x434]));
+        assert_eq!(object_starts(&[0x08], 2), None);
+    }
+
+    /// One of Giants' screens laid out as the game's are, with an object of
+    /// another kind and then a picture named by `path`, its pixels `pixels`.
+    fn build_screen(path: &str, format: u32, width: u16, height: u16, pixels: &[u8]) -> Vec<u8> {
+        let word = |out: &mut Vec<u8>, value: u32| out.extend_from_slice(&value.to_be_bytes());
+        let mut out = vec![0; 0x800];
+        out[0..4].copy_from_slice(&MAGIC.to_be_bytes());
+        out[4..8].copy_from_slice(&GIANTS.to_be_bytes());
+
+        let tables = out.len();
+        let entries: [(u32, u32, Vec<u8>); 4] = [
+            (KINDS, 2, b"igObjectList\0igImage2\0\0\0".to_vec()),
+            (OUTSIDE_THINGS, 1, [format.to_be_bytes(), 0x843c_d0c2u32.to_be_bytes()].concat()),
+            // Objects at 4 and 0x1C: steps of no fours, then five.
+            (OBJECTS, 2, vec![0x50, 0, 0, 0]),
+            // The pixels: 0x80 into the pixels' section, as the game's start.
+            (MEMORY, 1, [(0x2800_0000 | pixels.len() as u32).to_be_bytes(), 0x0100_0080u32.to_be_bytes()].concat()),
+        ];
+        out.extend_from_slice(&[0; 0x1c]);
+        out[tables + 0x10..tables + 0x14].copy_from_slice(&(entries.len() as u32).to_be_bytes());
+        out[tables + 0x14..tables + 0x18].copy_from_slice(&0x1cu32.to_be_bytes());
+        for (number, count, body) in entries {
+            word(&mut out, number);
+            word(&mut out, 0);
+            word(&mut out, 0);
+            word(&mut out, count);
+            word(&mut out, 24 + body.len() as u32);
+            word(&mut out, 24);
+            out.extend_from_slice(&body);
+        }
+
+        // The object at 4 is left as zeros, which makes it an igObjectList.
+        let objects = out.len();
+        out.extend_from_slice(&[0; 0x1c + 0x60]);
+        let picture = objects + 0x1c;
+        out[picture..picture + 4].copy_from_slice(&1u32.to_be_bytes());
+        // Its name starts the strings' section, number 2 counting from the
+        // objects'.
+        out[picture + PICTURE_NAME..picture + PICTURE_NAME + 4].copy_from_slice(&0x0200_0000u32.to_be_bytes());
+        out[picture + PICTURE_SIZE..picture + PICTURE_SIZE + 2].copy_from_slice(&width.to_be_bytes());
+        out[picture + PICTURE_SIZE + 2..picture + PICTURE_SIZE + 4].copy_from_slice(&height.to_be_bytes());
+        out[picture + PICTURE_FORMAT..picture + PICTURE_FORMAT + 4].copy_from_slice(&0x8000_0000u32.to_be_bytes());
+
+        let pixels_at = out.len();
+        out.extend_from_slice(&[0; 0x80]);
+        out.extend_from_slice(pixels);
+        let strings = out.len();
+        out.extend_from_slice(path.as_bytes());
+        out.push(0);
+
+        for (index, offset) in [tables, objects, pixels_at, strings].into_iter().enumerate() {
+            let at = GIANTS_SECTIONS + index * 16;
+            out[at..at + 4].copy_from_slice(&(offset as u32).to_be_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn a_giants_screen_gives_each_picture_with_its_name() {
+        let pixels: Vec<u8> = (0..=255).collect();
+        let path = "levels/includes/ui_main/sprites/collections/sky2/portraits/airdragon.png";
+        let pictures = screen(&build_screen(path, 0x942d_575f, 16, 16, &pixels)).unwrap();
+        assert_eq!(pictures.len(), 1);
+        assert_eq!(pictures[0].source, "airdragon");
+        assert_eq!(pictures[0].format, 0x942d_575f);
+        assert_eq!((pictures[0].width, pictures[0].height), (16, 16));
+        assert_eq!(pictures[0].pixels, pixels);
     }
 }

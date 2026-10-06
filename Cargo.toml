@@ -2,7 +2,7 @@
 name = "omoio-portraits"
 version = "0.2.0"
 edition = "2021"
-description = "Reads the figure pictures out of the user's own copy of Skylanders SWAP Force or Trap Team, for Omoio's portal menu."
+description = "Reads the figure pictures out of the user's own copy of Skylanders Giants, SWAP Force or Trap Team, for Omoio's portal menu."
 publish = false
 
 [dependencies]

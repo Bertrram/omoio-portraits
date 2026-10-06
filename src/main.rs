@@ -1,20 +1,23 @@
-//! Reads the figure pictures out of the user's own copy of Skylanders SWAP
-//! Force or Trap Team, for Omoio's portal menu. Omoio downloads this program
-//! only when the user asks for the pictures, and runs it two ways:
+//! Reads the figure pictures out of the user's own copy of Skylanders
+//! Giants, SWAP Force or Trap Team, for Omoio's portal menu. Omoio downloads
+//! this program only when the user asks for the pictures, and runs it two
+//! ways:
 //!
-//!     omoio-portraits title <game.wua>
-//!     omoio-portraits pictures <game.wua or unpacked game folder> <folder>
+//!     omoio-portraits title <game.wua or game folder>
+//!     omoio-portraits pictures <game.wua or game folder> <folder>
 //!
 //! `title` prints `title <title id>`, so Omoio can tell which game a .wua
-//! is. `pictures` writes one PNG per figure into the folder, the right way
-//! up, named `<id>-<variant>.png` with the variant as four hex digits, the
-//! game's eight element symbols as white shapes, `element-<name>.png`, for
-//! Omoio to colour, and the badges of the eight ways a swapper moves,
-//! `movement-<name>.png`. From Trap Team it writes every figure and trap as
-//! its Collection screen shows them, with the same names, and each villain
-//! in a trap and out of one, `villain-<number>.png` and
-//! `villain-<number>-loose.png`. It prints `progress <done> <of>` as it goes
-//! and `done <written>` at the end.
+//! or a PS3 game folder is. `pictures` writes one PNG per figure into the
+//! folder, the right way up, named `<id>-<variant>.png` with the variant as
+//! four hex digits, the game's eight element symbols as white shapes,
+//! `element-<name>.png`, for Omoio to colour, and the badges of the eight
+//! ways a swapper moves, `movement-<name>.png`. From Trap Team it writes
+//! every figure and trap as its Collection screen shows them, with the same
+//! names, and each villain in a trap and out of one, `villain-<number>.png`
+//! and `villain-<number>-loose.png`. From Giants, a PS3 game folder, it
+//! writes every figure, magic item and sidekick its Collection screen shows,
+//! and its element symbols. It prints `progress <done> <of>` as it goes and
+//! `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
 
 mod dxt5;
@@ -36,8 +39,25 @@ const TRAP_TEAM: [&str; 3] = [
     "content/misc/ui_collection_traps.arc",
     "content/misc/ui_villainvault_stream.arc",
 ];
+/// Giants keeps each of its screens in an archive of its own: the Collection
+/// screen's has a picture of every figure, and the card game's the element
+/// symbols. The screen itself is the archive's `level.bld`; its other files
+/// are its words in each language.
+const GIANTS: &str = "PS3_GAME/USRDIR/misc/ui_collection_champions.bld";
+const GIANTS_SYMBOLS: &str = "PS3_GAME/USRDIR/misc/ui_cardgame_handselect_streaming.bld";
+const SCREEN: &str = "level.bld";
+/// Giants' element symbols are named `<element>_glass256`.
+const GLASS_SYMBOL: &str = "_glass256";
+const ELEMENTS: [&str; 8] = ["air", "earth", "fire", "life", "magic", "tech", "undead", "water"];
+/// Giants' symbols are glass, a see-through shape with a faint glow around
+/// it, and Omoio paints a symbol through its alpha. So the glow, which stays
+/// under 64, is cleared, and the glass, whose flat inside is 176, made
+/// solid, keeping the shape's soft edge and the lines cut into it.
+const GLOW: u32 = 64;
+const GLASS: u32 = 176;
+const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
 const NOT_KNOWN_GAME: &str =
-    "This game has no figure pictures Omoio can read yet. So far that is Skylanders SWAP Force and Trap Team.";
+    "This game has no figure pictures Omoio can read yet. So far that is Skylanders Giants on the PS3, SWAP Force and Trap Team.";
 /// The archive with the town's elemental stones, whose texture has the eight
 /// element symbols as white shapes, four across and two down, in this order
 /// (checked by eye).
@@ -70,8 +90,11 @@ const META: &str = "meta/meta.xml";
 /// DXT5 kept tiled for the Wii U's chip, as the game's pictures name it
 /// (a hash of "dxt5_tile_cafe").
 const DXT5_TILED: u32 = 0x98cb_2a65;
+/// DXT5 as Giants keeps it on the PS3, by the hashes of "dxt5_tile_big_ps3"
+/// and "dxt5_big_ps3": in both the blocks are in rows, as on a PC.
+const DXT5_PS3: [u32; 2] = [0x942d_575f, 0xf8bb_b422];
 
-const USAGE: &str = "Usage: omoio-portraits title <game.wua>\n       omoio-portraits pictures <game.wua or game folder> <folder>";
+const USAGE: &str = "Usage: omoio-portraits title <game.wua or game folder>\n       omoio-portraits pictures <game.wua or game folder> <folder>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -95,7 +118,7 @@ fn main() -> ExitCode {
 /// One file of the game, from a .wua or from an unpacked game folder.
 fn game_file(game: &Path, inside: &str) -> Result<Option<Vec<u8>>, String> {
     if game.is_dir() {
-        return Ok(std::fs::read(game.join(inside)).ok());
+        return Ok(std::fs::read(game_folder(game).join(inside)).ok());
     }
     let mut archive = wua::Archive::open(game)?;
     match archive.files().into_iter().find(|file| file.path.ends_with(inside)) {
@@ -104,15 +127,52 @@ fn game_file(game: &Path, inside: &str) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-/// The game's title id, from its meta.xml.
+/// The folder a game's paths start from. A PS3 game may be given as the
+/// folder that holds PS3_GAME, or as PS3_GAME or its USRDIR.
+fn game_folder(game: &Path) -> &Path {
+    let named = |path: &Path, name: &str| path.file_name().is_some_and(|own| own.eq_ignore_ascii_case(name));
+    match game.parent() {
+        Some(parent) if named(game, "USRDIR") && named(parent, "PS3_GAME") => parent.parent().unwrap_or(parent),
+        Some(parent) if named(game, "PS3_GAME") => parent,
+        _ => game,
+    }
+}
+
+/// The game's title id: a PS3 game's from its PARAM.SFO, a Wii U game's
+/// from its meta.xml.
 fn title(game: &Path) -> Result<String, String> {
     let unknown = || "Couldn't tell which game this is.".to_string();
+    if let Some(sfo) = game_file(game, PARAM_SFO)? {
+        return sfo_text(&sfo, "TITLE_ID").ok_or_else(unknown);
+    }
     let meta = game_file(game, META)?.ok_or_else(unknown)?;
     let meta = String::from_utf8_lossy(&meta);
     let (_, rest) = meta.split_once("<title_id").ok_or_else(unknown)?;
     let (_, rest) = rest.split_once('>').ok_or_else(unknown)?;
     let (id, _) = rest.split_once('<').ok_or_else(unknown)?;
     Ok(id.trim().to_ascii_lowercase())
+}
+
+/// A text value of a PS3 game's PARAM.SFO. After the magic and a version
+/// come where the keys and the values start and how many there are, then
+/// 16 bytes for each: the key's offset, its format, the value's length, the
+/// room kept for it and its offset. Everything is little-endian.
+fn sfo_text(sfo: &[u8], wanted: &str) -> Option<String> {
+    let word = |at: usize| sfo.get(at..at + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
+    if sfo.get(..4)? != b"\0PSF" {
+        return None;
+    }
+    let (keys, values) = (word(8)?, word(12)?);
+    (0..word(16)?).find_map(|index| {
+        let entry = 20 + index * 16;
+        let key_at = keys + sfo.get(entry..entry + 2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))?;
+        if sfo.get(key_at..)?.split(|&b| b == 0).next()? != wanted.as_bytes() {
+            return None;
+        }
+        let value_at = values + word(entry + 12)?;
+        let value = sfo.get(value_at..value_at + word(entry + 4)?)?;
+        Some(String::from_utf8_lossy(value).trim_end_matches('\0').to_string())
+    })
 }
 
 /// An archive's textures; its other files are models, sounds and scripts.
@@ -123,8 +183,11 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 /// Tells the game by its files rather than its title id, so every region's
 /// copy of it is read the same way.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
-    match game_file(game, PORTRAITS)? {
-        Some(bytes) => swap_force(game, &bytes, folder),
+    if let Some(bytes) = game_file(game, PORTRAITS)? {
+        return swap_force(game, &bytes, folder);
+    }
+    match game_file(game, GIANTS)? {
+        Some(bytes) => giants(game, &bytes, folder),
         None => trap_team(game, folder),
     }
 }
@@ -188,6 +251,66 @@ fn trap_team(game: &Path, folder: &Path) -> Result<usize, String> {
     }
     println!("progress {steps} {steps}");
     Ok(written)
+}
+
+fn giants(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String> {
+    let pictures = screen_pictures(bytes)?;
+    std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
+    // The element symbols come last, a step of their own.
+    let steps = pictures.len() + 1;
+    let mut written = 0;
+    for (done, picture) in pictures.iter().enumerate() {
+        println!("progress {done} {steps}");
+        let Some((id, variant)) = names::giants(&picture.source) else {
+            continue;
+        };
+        if !DXT5_PS3.contains(&picture.format) {
+            continue;
+        }
+        write(&folder.join(format!("{id}-{variant:04x}.png")), picture.width, picture.height, &upright(picture)?)?;
+        written += 1;
+    }
+    println!("progress {} {steps}", pictures.len());
+    written += giants_symbols(game, folder)?;
+    println!("progress {steps} {steps}");
+    Ok(written)
+}
+
+/// The pictures of the screen one of Giants' archives holds.
+fn screen_pictures(bytes: &[u8]) -> Result<Vec<igz::Picture>, String> {
+    let archive = pak::open(bytes)?;
+    let screen = archive.files.iter().find(|file| file.name == SCREEN).ok_or(NOT_KNOWN_GAME)?;
+    igz::screen(&archive.read(screen)?).ok_or_else(|| NOT_KNOWN_GAME.to_string())
+}
+
+/// Giants' eight element symbols, which its card game shows, written as
+/// `element-<name>.png`. A copy without the card game just has none.
+fn giants_symbols(game: &Path, folder: &Path) -> Result<usize, String> {
+    let Some(bytes) = game_file(game, GIANTS_SYMBOLS)? else {
+        return Ok(0);
+    };
+    let mut written = 0;
+    for picture in screen_pictures(&bytes)? {
+        let Some(element) = picture.source.strip_suffix(GLASS_SYMBOL) else {
+            continue;
+        };
+        if !ELEMENTS.contains(&element) || !DXT5_PS3.contains(&picture.format) {
+            continue;
+        }
+        let mut shape = upright(&picture)?;
+        solid(&mut shape);
+        write(&folder.join(format!("element-{element}.png")), picture.width, picture.height, &shape)?;
+        written += 1;
+    }
+    Ok(written)
+}
+
+/// A glass symbol as a white shape: its glow cleared and its glass solid.
+fn solid(rgba: &mut [u8]) {
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = (u32::from(pixel[3]).saturating_sub(GLOW) * 255 / (GLASS - GLOW)).min(255);
+        pixel.copy_from_slice(&[255, 255, 255, alpha as u8]);
+    }
 }
 
 /// The eight element symbols, written as `element-<name>.png`. A game
@@ -288,7 +411,12 @@ fn upright(picture: &igz::Picture) -> Result<Vec<u8>, String> {
     // A side that isn't a multiple of 4 is stored as whole blocks; the
     // pixels past it are cut off once decoded. Trap Team's villains are 171.
     let (wide, high) = (width.div_ceil(4), height.div_ceil(4));
-    let blocks = gx2::untile(&picture.pixels, wide, high).ok_or("A picture in the game is shorter than its size says.")?;
+    let blocks = if picture.format == DXT5_TILED {
+        gx2::untile(&picture.pixels, wide, high)
+    } else {
+        picture.pixels.get(..wide * high * 16).map(<[u8]>::to_vec)
+    }
+    .ok_or("A picture in the game is shorter than its size says.")?;
     let rows = dxt5::decode(&blocks, wide * 4, high * 4);
     // The game keeps its pictures bottom row first.
     Ok(rows.chunks(wide * 16).take(height).rev().flat_map(|row| &row[..width * 4]).copied().collect())
@@ -318,5 +446,59 @@ mod tests {
         assert_eq!(badge_cover(150, 25), 0); // past its top right side
         // Its left side runs down x = 47.67, so the pixel at 47 is a quarter badge.
         assert_eq!(badge_cover(47, 80), 4);
+    }
+
+    #[test]
+    fn a_glass_symbol_becomes_a_solid_white_shape() {
+        let mut pixels = [9, 9, 9, 0, 200, 100, 50, 64, 30, 30, 30, 120, 255, 255, 255, 176, 1, 2, 3, 255];
+        solid(&mut pixels);
+        assert_eq!(pixels, [255, 255, 255, 0, 255, 255, 255, 0, 255, 255, 255, 127, 255, 255, 255, 255, 255, 255, 255, 255]);
+    }
+
+    /// A PARAM.SFO holding `entries`, laid out as a PS3 game's.
+    fn build_sfo(entries: &[(&str, &str)]) -> Vec<u8> {
+        let keys_at = 20 + entries.len() * 16;
+        let keys: Vec<u8> = entries.iter().flat_map(|(key, _)| [key.as_bytes(), b"\0"].concat()).collect();
+        let values_at = (keys_at + keys.len()).next_multiple_of(4);
+        let mut out = vec![0; values_at];
+        out[0..4].copy_from_slice(b"\0PSF");
+        out[4..8].copy_from_slice(&0x101u32.to_le_bytes());
+        out[8..12].copy_from_slice(&(keys_at as u32).to_le_bytes());
+        out[12..16].copy_from_slice(&(values_at as u32).to_le_bytes());
+        out[16..20].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        out[keys_at..keys_at + keys.len()].copy_from_slice(&keys);
+        let mut key_offset = 0;
+        for (index, (key, value)) in entries.iter().enumerate() {
+            let entry = 20 + index * 16;
+            let value_offset = out.len() - values_at;
+            out[entry..entry + 2].copy_from_slice(&(key_offset as u16).to_le_bytes());
+            out[entry + 2..entry + 4].copy_from_slice(&0x0204u16.to_le_bytes());
+            out[entry + 4..entry + 8].copy_from_slice(&(value.len() as u32 + 1).to_le_bytes());
+            out[entry + 8..entry + 12].copy_from_slice(&32u32.to_le_bytes());
+            out[entry + 12..entry + 16].copy_from_slice(&(value_offset as u32).to_le_bytes());
+            out.extend_from_slice(value.as_bytes());
+            out.resize(out.len() + 32 - value.len(), 0);
+            key_offset += key.len() + 1;
+        }
+        out
+    }
+
+    #[test]
+    fn a_ps3_game_is_told_by_its_param_sfo() {
+        let sfo = build_sfo(&[("CATEGORY", "DG"), ("TITLE", "Skylanders Giants"), ("TITLE_ID", "BLES01689")]);
+        assert_eq!(sfo_text(&sfo, "TITLE_ID"), Some("BLES01689".to_string()));
+        assert_eq!(sfo_text(&sfo, "TITLE"), Some("Skylanders Giants".to_string()));
+        assert_eq!(sfo_text(&sfo, "APP_VER"), None);
+        assert_eq!(sfo_text(b"PK\x03\x04", "TITLE_ID"), None);
+    }
+
+    #[test]
+    fn a_ps3_game_is_read_from_the_folder_that_holds_ps3_game() {
+        let disc = Path::new("D:\\Games\\Skylanders Giants");
+        assert_eq!(game_folder(disc), disc);
+        assert_eq!(game_folder(&disc.join("PS3_GAME")), disc);
+        assert_eq!(game_folder(&disc.join("PS3_GAME").join("USRDIR")), disc);
+        assert_eq!(game_folder(&disc.join("ps3_game").join("usrdir")), disc);
+        assert_eq!(game_folder(Path::new("D:\\Games\\USRDIR")), Path::new("D:\\Games\\USRDIR"));
     }
 }

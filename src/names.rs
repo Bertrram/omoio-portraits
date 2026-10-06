@@ -227,9 +227,160 @@ pub fn trap_team(path: &str) -> Option<String> {
     }
 }
 
+/// Skylanders Giants' Collection screen, which shows each figure it knows as
+/// a round close-up, 256 x 256: the picture's name, then the figure's id and
+/// variant. The names are code names too ("eagle" is Jet Vac), so the table
+/// was checked by eye; the screen's own name for each says its id. The
+/// variants are those Cemu's and RPCS3's lists give, but every sidekick is
+/// given as variant 0, the plain figure Omoio falls back to, as the lists
+/// give some of them only in later versions.
+pub const GIANTS: &[(&str, u16, u16)] = &[
+    ("airdragon", 0, 0x0000), // Whirlwind
+    ("airdragon_series2", 0, 0x1801), // Series 2 Whirlwind
+    ("airdragon_series2_alt", 0, 0x1c02), // Polar Whirlwind
+    ("griffin", 1, 0x0000), // Sonic Boom
+    ("griffin_series2", 1, 0x1801), // Series 2 Sonic Boom
+    ("waterdragon", 2, 0x0000), // Warnado
+    ("stormgiant", 3, 0x0000), // Lightning Rod
+    ("stormgiant_series2", 3, 0x1801), // Series 2 Lightning Rod
+    ("rockdragon", 4, 0x0000), // Bash
+    ("rockdragon_series2", 4, 0x1801), // Series 2 Bash
+    ("landshark", 5, 0x0000), // Terrafin
+    ("landshark_series2", 5, 0x1801), // Series 2 Terrafin
+    ("dinorang", 6, 0x0000), // Dino Rang
+    ("gemgolem", 7, 0x0000), // Prism Break
+    ("gemgolem_lightcore", 7, 0x1206), // LightCore Prism Break
+    ("gemgolem_series2", 7, 0x1801), // Series 2 Prism Break
+    ("phoenixdragon", 8, 0x0000), // Sunburn
+    ("eruptor", 9, 0x0000), // Eruptor
+    ("eruptor_lightcore", 9, 0x1206), // LightCore Eruptor
+    ("eruptor_series2", 9, 0x1801), // Series 2 Eruptor
+    ("flameknight", 10, 0x0000), // Ignitor
+    ("flameknight_series2", 10, 0x1801), // Series 2 Ignitor
+    ("flameknight_series2legendary", 10, 0x1c03), // Legendary Ignitor
+    ("firearcher", 11, 0x0000), // Flameslinger
+    ("firearcher_series2", 11, 0x1801), // Series 2 Flameslinger
+    ("waterdragon2", 12, 0x0000), // Zap
+    ("waterdragon2_series2", 12, 0x1801), // Series 2 Zap
+    ("crustbuckler", 13, 0x0000), // Wham Shell
+    ("gillgrunt", 14, 0x0000), // Gill Grunt
+    ("gilgrunt_series2", 14, 0x1801), // Series 2 Gill Grunt
+    ("yeti", 15, 0x0000), // Slam Bam
+    ("yeti_series2", 15, 0x1801), // Series 2 Slam Bam
+    ("yetilegendary", 15, 0x1c03), // Legendary Slam Bam
+    ("spyrojr", 16, 0x0000), // Spyro
+    ("spyro_series2", 16, 0x1801), // Series 2 Spyro
+    ("skullorc", 17, 0x0000), // Voodood
+    ("tikiwizard", 18, 0x0000), // Double Trouble
+    ("tikiwizard_series2", 18, 0x1801), // Series 2 Double Trouble
+    ("tikiwizard_series2_alt", 18, 0x1c02), // Royal Double Trouble
+    ("goldencheat", 19, 0x0000), // Trigger Happy
+    ("goldencheat_series2", 19, 0x1801), // Series 2 Trigger Happy
+    ("metaldragon", 20, 0x0000), // Drobot
+    ("metaldragon_lightcore", 20, 0x1206), // LightCore Drobot
+    ("metaldragon_series2", 20, 0x1801), // Series 2 Drobot
+    ("drillbot", 21, 0x0000), // Drill Sergeant
+    ("drillbot_series2", 21, 0x1801), // Series 2 Drill Sergeant
+    ("troll", 22, 0x0000), // Boomer
+    ("balldragon", 23, 0x0000), // Wrecking Ball
+    ("balldragon_series2", 23, 0x1801), // Series 2 Wrecking Ball
+    ("plantdragon", 24, 0x0000), // Camo
+    ("bambazooker", 25, 0x0000), // Zook
+    ("bambazooker_series2", 25, 0x1801), // Series 2 Zook
+    ("stealthelf", 26, 0x0000), // Stealth Elf
+    ("stealthelf_series2", 26, 0x1801), // Series 2 Stealth Elf
+    ("stealthelflegendary", 26, 0x1c03), // Legendary Stealth Elf
+    ("stumpsmashent", 27, 0x0000), // Stump Smash
+    ("stumpsmash_series2", 27, 0x1801), // Series 2 Stump Smash
+    ("darkspyro", 28, 0x0000), // Dark Spyro
+    ("shadowmaid", 29, 0x0000), // Hex
+    ("shadowmaidlightcore", 29, 0x1206), // LightCore Hex
+    ("shadowmaid_series2", 29, 0x1801), // Series 2 Hex
+    ("pandoranguard", 30, 0x0000), // Chop Chop
+    ("pandoranguard_series2", 30, 0x1801), // Series 2 Chop Chop
+    ("ghosteater", 31, 0x0000), // Ghost Roaster
+    ("cynder", 32, 0x0000), // Cynder
+    ("cynder_series2", 32, 0x1801), // Series 2 Cynder
+    ("eagle", 100, 0x0000), // Jet Vac
+    ("eaglelightcore", 100, 0x1206), // LightCore Jet Vac
+    ("eaglelegendary", 100, 0x1403), // Legendary Jet Vac
+    ("giantair", 101, 0x0000), // Swarm
+    ("earthgiant", 102, 0x0000), // Crusher
+    ("earthgiant_alt", 102, 0x1602), // Granite Crusher
+    ("earthdragon", 103, 0x0000), // Flashwing
+    ("earthdragon_alt", 103, 0x1402), // Jade Flashwing
+    ("firegiant", 104, 0x0000), // Hot Head
+    ("firedog", 105, 0x0000), // Hot Dog
+    ("firedog_alt", 105, 0x1402), // Molten Hot Dog
+    ("icevalkyrie", 106, 0x0000), // Chill
+    ("icevalkyrielightcore", 106, 0x1206), // LightCore Chill
+    ("icevalkyrielegendarylightcore", 106, 0x1603), // Legendary Chill
+    ("whale", 107, 0x0000), // Thumpback
+    ("alchemist", 108, 0x0000), // Pop Fizz
+    ("alchemistlightcore", 108, 0x1206), // LightCore Pop Fizz
+    ("alchemistred", 108, 0x1402), // Punch Pop Fizz
+    ("giantmagic", 109, 0x0000), // Ninjini
+    ("giantmagic_alt", 109, 0x1602), // Scarlet Ninjini
+    ("robogiant2", 110, 0x0000), // Bouncer
+    ("robogiant2legendary", 110, 0x1603), // Legendary Bouncer
+    ("steampunkgirl", 111, 0x0000), // Sprocket
+    ("titanlife", 112, 0x0000), // Tree Rex
+    ("titanlife_alt", 112, 0x1602), // Gnarly Tree Rex
+    ("shroomy", 113, 0x0000), // Shroomboom
+    ("shroomylightcore", 113, 0x1206), // LightCore Shroomboom
+    ("cyclopsgiant", 114, 0x0000), // Eye Brawl
+    ("undeadrider", 115, 0x0000), // Fright Rider
+    ("magicitem_anvilrain", 200, 0x0000), // Anvil Rain
+    ("magicitem_treasurechest", 201, 0x0000), // Hidden Treasure
+    ("magicitem_healingelixir", 202, 0x0000), // Healing Elixir
+    ("magicitem_ghostswords", 203, 0x0000), // Ghost Pirate Swords
+    ("magicitems_timetwister", 204, 0x0000), // Time Twist Hourglass
+    ("magicitem_skyironshield", 205, 0x0000), // Sky Iron Shield
+    ("magicitem_wingedboots", 206, 0x0000), // Winged Boots
+    ("magicitem_sparx", 207, 0x0000), // Sparx the Dragonfly
+    ("magicitem_cannon", 208, 0x1206), // Dragonfire Cannon
+    ("magicitem_cannonlegendary", 208, 0x1602), // the gold Dragonfire Cannon, with the variant Trap Team gives it
+    ("magicitem_catapult", 209, 0x1206), // Scorpion Striker
+    ("magicitem_dragonspeak", 300, 0x0000), // Dragon's Peak
+    ("magicitem_empireofice", 301, 0x0000), // Empire of Ice
+    ("magicitem_pirateship", 302, 0x0000), // Pirate Seas
+    ("magicitem_darklightcrypt", 303, 0x0000), // Darklight Crypt
+    ("magicitem_volcanicvault", 304, 0x0000), // Volcanic Vault
+    ("rockdragonlegendary", 404, 0x0000), // Legendary Bash
+    ("spyrojrlegendary", 416, 0x0000), // Legendary Spyro
+    ("goldencheatlegendary", 419, 0x0000), // Legendary Trigger Happy
+    ("pandoranguardlegendary", 430, 0x0000), // Legendary Chop Chop
+    ("landshark_sidekick", 505, 0x0000), // Terrabite
+    ("gillgrunt_sidekick", 514, 0x0000), // Gill Runt
+    ("goldencheat_sidekick", 519, 0x0000), // Trigger Snappy
+    ("stealthelf_sidekick", 526, 0x0000), // Whisper Elf
+    ("titanlife_sidekick", 540, 0x0000), // Barkley
+    ("whale_sidekick", 541, 0x0000), // Thumpling
+    ("giantmagic_sidekick", 542, 0x0000), // Mini Jini
+    ("cyclopsgiant_sidekick", 543, 0x0000), // Eye Small
+];
+
+/// The figure one of Giants' Collection pictures shows, by the picture's
+/// name.
+pub fn giants(source: &str) -> Option<(u16, u16)> {
+    GIANTS.iter().find(|(name, _, _)| *name == source).map(|&(_, id, variant)| (id, variant))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn giants_pictures_are_told_by_their_names() {
+        assert_eq!(giants("airdragon"), Some((0, 0x0000)));
+        assert_eq!(giants("gilgrunt_series2"), Some((14, 0x1801)));
+        assert_eq!(giants("eaglelightcore"), Some((100, 0x1206)));
+        assert_eq!(giants("darkspyro"), Some((28, 0x0000)));
+        assert_eq!(giants("magicitem_cannon"), Some((208, 0x1206)));
+        assert_eq!(giants("cyclopsgiant_sidekick"), Some((543, 0x0000)));
+        assert_eq!(giants("toyportrait_bgowned"), None);
+        assert_eq!(giants("Whirlwind_WiiPortrait"), None);
+    }
 
     #[test]
     fn trap_team_pictures_are_told_by_their_archive_names() {
@@ -261,9 +412,11 @@ mod tests {
 
     #[test]
     fn no_figure_has_two_pictures() {
-        let mut seen = std::collections::HashSet::new();
-        for &(name, id, variant) in PORTRAITS {
-            assert!(seen.insert((id, variant)), "{name} repeats a figure");
+        for table in [PORTRAITS, GIANTS] {
+            let mut seen = std::collections::HashSet::new();
+            for &(name, id, variant) in table {
+                assert!(seen.insert((id, variant)), "{name} repeats a figure");
+            }
         }
     }
 }
