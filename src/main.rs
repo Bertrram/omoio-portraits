@@ -1,6 +1,6 @@
 //! Reads the figure pictures out of the user's own copy of Skylanders
-//! Spyro's Adventure, Giants, SWAP Force or Trap Team, for Omoio's portal
-//! menu. Omoio downloads
+//! Spyro's Adventure, Giants, SWAP Force, Trap Team or SuperChargers, for
+//! Omoio's portal menu. Omoio downloads
 //! this program only when the user asks for the pictures, and runs it two
 //! ways:
 //!
@@ -21,7 +21,11 @@
 //! SWAP Force and Trap Team give the same pictures from a .wua of the Wii U
 //! version as from a folder of the PS3 one. From Spyro's Adventure, a PS3
 //! game folder, it writes each Skylander as its versus screen shows them,
-//! whole, and its element symbols. It
+//! whole, and its element symbols. From SuperChargers, a .wua of the Wii U
+//! version, it writes every toy and variant its Collection screen shows,
+//! vehicles and trophies among them, its ten element symbols, its badge for
+//! a SuperCharger, `class-supercharger.png`, and its Land, Sea and Sky
+//! symbols as white shapes, `terrain-<name>.png`. It
 //! prints `progress <done> <of>` as it goes and `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
 //!
@@ -30,9 +34,7 @@
 //!     omoio-portraits survey <game.wua or game folder> [<word>]
 //!
 //! prints what a reader of its pictures would need to know and writes
-//! nothing (see `survey`). Skylanders SuperChargers is such a game, and
-//! `pictures` stops on it with a plain message rather than read it as
-//! another.
+//! nothing (see `survey`).
 
 mod dxt5;
 mod gx2;
@@ -41,8 +43,10 @@ mod names;
 mod pak;
 mod strm;
 mod survey;
+mod toys;
 mod wua;
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -103,14 +107,37 @@ const SPYRO_ELEMENTS: [(&str, &str); 8] = [
 /// The size SWAP Force's portraits are, which Omoio shows them at.
 const PORTRAIT_SIDE: usize = 256;
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
-const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team.";
-/// Skylanders SuperChargers on the Wii U, by the last eight digits of the
-/// title ids Cemu's graphic packs give it, 00050000101BFC00 and
-/// 00050000101B8500, which its update and DLC share. Its files haven't been
-/// seen yet (7 October 2026), so `pictures` stops on it rather than read it
-/// as one of the other games.
-const SUPERCHARGERS: [&str; 2] = ["101bfc00", "101b8500"];
-const SUPERCHARGERS_NOT_YET: &str = "Omoio can't read the figure pictures of Skylanders SuperChargers yet.";
+const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team, and SuperChargers on the Wii U.";
+/// SuperChargers keeps its toy data in `permanent.pak` (see `toys`) and the
+/// pictures its Collection screen draws each toy with in
+/// `ToyCollectionMaterials.pak`: a material for each,
+/// `materialInstances/ToyCollection/<name>.igz`, which names its picture in
+/// the namespace `image`, an entry `textures/<name>.igz` of the same
+/// archive, 88 pixels square. Seen in the game's files, 7 October 2026.
+const COLLECTION: &str = "archives/ToyCollectionMaterials.pak";
+const TOY_DATA: &str = "archives/permanent.pak";
+const TOY_DATA_FOLDER: &str = "/ToyData/";
+const MATERIALS: &str = "/materialInstances/ToyCollection/";
+const TEXTURES: &str = "/textures/";
+const PICTURE_NAMESPACE: &str = "image";
+const IGZ: &str = ".igz";
+/// SuperChargers' symbols, each found by the end of its picture's name. Its
+/// element symbols, white, are those of its Skystones game: Water's is in
+/// `permanent.pak` with the toy data and the other nine in every level's
+/// archive, read from the hub's. Its badge for a SuperCharger is
+/// the bolt it keeps with its coloured element symbols in `permanent.pak`.
+/// Its Land, Sea and Sky symbols are the pale vehicle icons of its race
+/// menu, where the game says Air for Sky; they are made white like the
+/// element symbols.
+const SUPERCHARGERS_HUB: &str = "archives/Academy.pak";
+const SUPERCHARGERS_ELEMENTS: [&str; 10] = ["air", "dark", "earth", "fire", "life", "light", "magic", "tech", "undead", "water"];
+const SUPERCHARGERS_BADGE: &str = "!ui!ElementalIcons!DN_SuperCharged`tga";
+const RACE_MENU: &str = "archives/AP_RaceSelect.pak";
+const TERRAINS: [(&str, &str); 3] = [
+    ("land", "!RaceMenu!LandVehicle_Icon`tga"),
+    ("sea", "!RaceMenu!SeaVehicle_Icon`tga"),
+    ("sky", "!RaceMenu!AirVehicle_Icon`tga"),
+];
 /// The archive with the town's elemental stones, whose texture has the eight
 /// element symbols as white shapes, four across and two down, in this order
 /// (checked by eye).
@@ -228,12 +255,6 @@ fn meta_value(meta: &str, key: &str) -> Option<String> {
     Some(value.trim().to_string())
 }
 
-/// Whether a title id, as `title` gives it, is one of Skylanders
-/// SuperChargers on the Wii U: the game's, its update's or its DLC's.
-fn is_superchargers(id: &str) -> bool {
-    id.len() == 16 && SUPERCHARGERS.iter().any(|end| id.ends_with(end))
-}
-
 /// A text value of a PS3 game's PARAM.SFO. After the magic and a version
 /// come where the keys and the values start and how many there are, then
 /// 16 bytes for each: the key's offset, its format, the value's length, the
@@ -262,14 +283,14 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 }
 
 /// Tells the game by its files rather than its title id, so every region's
-/// copy of it is read the same way. SuperChargers alone is told by its title
-/// id, as its own files aren't known yet.
+/// copy of it is read the same way: SuperChargers' two title ids,
+/// 00050000101BFC00 and 00050000101B8500, alike.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
-    if title(game).is_ok_and(|id| is_superchargers(&id)) {
-        return Err(SUPERCHARGERS_NOT_YET.to_string());
-    }
     if let Some(bytes) = data_file(game, PORTRAITS)? {
         return swap_force(game, &bytes, folder);
+    }
+    if let Some(bytes) = data_file(game, COLLECTION)? {
+        return superchargers(game, &bytes, folder);
     }
     // Trap Team on the PS3 has a Collection screen archive named like
     // Giants', so it is told by its Villain Vault first.
@@ -282,6 +303,102 @@ fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     match game_file(game, SPYROS_ADVENTURE)? {
         Some(bytes) => spyros_adventure(&bytes, folder),
         None => Err(NOT_KNOWN_GAME.to_string()),
+    }
+}
+
+fn superchargers(game: &Path, collection: &[u8], folder: &Path) -> Result<usize, String> {
+    let collection = pak::open(collection)?;
+    let toy_data = data_file(game, TOY_DATA)?.ok_or(NOT_KNOWN_GAME)?;
+    let toy_data = pak::open(&toy_data)?;
+    let mut images = HashMap::new();
+    for file in collection.files.iter().filter(|file| file.name.contains(TEXTURES)) {
+        if let Some(name) = file.name.split(TEXTURES).nth(1).and_then(|name| name.strip_suffix(IGZ)) {
+            images.insert(name, file);
+        }
+    }
+    let mut materials = HashMap::new();
+    for file in collection.files.iter().filter(|file| file.name.contains(MATERIALS)) {
+        let Some(name) = file.name.rsplit('/').next().and_then(|name| name.strip_suffix(IGZ)) else {
+            continue;
+        };
+        let bytes = collection.read(file)?;
+        let picture = igz::Objects::read(&bytes).and_then(|objects| objects.outside_in(PICTURE_NAMESPACE).find_map(|picture| images.get(picture).copied()));
+        if let Some(picture) = picture {
+            materials.insert(name, picture);
+        }
+    }
+    let mut toy_files = Vec::new();
+    for file in toy_data.files.iter().filter(|file| file.name.contains(TOY_DATA_FOLDER) && file.name.ends_with(IGZ)) {
+        toy_files.push(toy_data.read(file)?);
+    }
+    let toys = toys::pictures(toy_files.iter().map(Vec::as_slice));
+    std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
+    // The symbols, the badge and the terrains come last, a step each.
+    let steps = toys.len() + 3;
+    let mut written = HashSet::new();
+    for (done, toy) in toys.iter().enumerate() {
+        println!("progress {done} {steps}");
+        let names: Vec<u16> = toy.variants.iter().copied().filter(|&variant| !written.contains(&(toy.id, variant))).collect();
+        let Some(&texture) = materials.get(toy.material.as_str()) else {
+            continue;
+        };
+        let Some(picture) = igz::read(&collection.read(texture)?).filter(|picture| dxt5(picture.format)) else {
+            continue;
+        };
+        let rgba = upright(&picture)?;
+        for variant in names {
+            write(&folder.join(format!("{}-{variant:04x}.png", toy.id)), picture.width, picture.height, &rgba)?;
+            written.insert((toy.id, variant));
+        }
+    }
+    println!("progress {} {steps}", toys.len());
+    let mut symbols = 0;
+    let hub = data_file(game, SUPERCHARGERS_HUB)?.unwrap_or_default();
+    let hub = pak::open(&hub).ok();
+    for element in SUPERCHARGERS_ELEMENTS {
+        let name = format!("!SkyStonesElementicons_{element}_C`tga");
+        let path = folder.join(format!("element-{element}.png"));
+        let mut found = write_symbol(&toy_data, &name, &path, true)?;
+        if let (0, Some(hub)) = (found, &hub) {
+            found = write_symbol(hub, &name, &path, true)?;
+        }
+        symbols += found;
+    }
+    println!("progress {} {steps}", toys.len() + 1);
+    symbols += write_symbol(&toy_data, SUPERCHARGERS_BADGE, &folder.join("class-supercharger.png"), false)?;
+    println!("progress {} {steps}", toys.len() + 2);
+    let race_menu = data_file(game, RACE_MENU)?.unwrap_or_default();
+    if let Ok(race_menu) = pak::open(&race_menu) {
+        for (terrain, name) in TERRAINS {
+            symbols += write_symbol(&race_menu, name, &folder.join(format!("terrain-{terrain}.png")), true)?;
+        }
+    }
+    println!("progress {steps} {steps}");
+    Ok(written.len() + symbols)
+}
+
+/// The picture of an archive whose name holds `name`, written to `path`,
+/// made a white shape when `white`. Gives how many were written: 0 when the
+/// archive has none.
+fn write_symbol(archive: &pak::Pak, name: &str, path: &Path, white: bool) -> Result<usize, String> {
+    for file in archive.files.iter().filter(|file| file.name.contains(name)) {
+        let Some(picture) = igz::read(&archive.read(file)?).filter(|picture| dxt5(picture.format)) else {
+            continue;
+        };
+        let mut rgba = upright(&picture)?;
+        if white {
+            make_white(&mut rgba);
+        }
+        write(path, picture.width, picture.height, &rgba)?;
+        return Ok(1);
+    }
+    Ok(0)
+}
+
+/// A symbol as a white shape, for Omoio to colour through its alpha.
+fn make_white(rgba: &mut [u8]) {
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel[..3].fill(255);
     }
 }
 
@@ -316,9 +433,7 @@ fn spyros_adventure(bytes: &[u8], folder: &Path) -> Result<usize, String> {
             let small = shrink(&rgba, width, height, PORTRAIT_SIDE);
             write(&folder.join(format!("{id}-0000.png")), PORTRAIT_SIDE, PORTRAIT_SIDE, &small)?;
         } else if let Some(element) = element {
-            for pixel in rgba.chunks_exact_mut(4) {
-                pixel[..3].fill(255);
-            }
+            make_white(&mut rgba);
             // Every symbol has a mark of ten pixels in its last 4 x 4 corner,
             // well apart from the shape, which would show as a speck.
             for y in height - 4..height {
@@ -719,15 +834,6 @@ mod tests {
     }
 
     #[test]
-    fn superchargers_is_told_by_its_title_ids() {
-        assert!(is_superchargers("00050000101bfc00"));
-        assert!(is_superchargers("00050000101b8500"));
-        assert!(is_superchargers("0005000e101bfc00")); // its update
-        assert!(!is_superchargers("0005000010140400")); // SWAP Force
-        assert!(!is_superchargers("BLES02055"));
-    }
-
-    #[test]
     fn a_wii_u_game_is_told_by_its_meta_xml() {
         let meta = "<menu><title_version type=\"unsignedInt\">16</title_version><title_id type=\"hexBinary\" length=\"8\">00050000101BFC00</title_id></menu>";
         assert_eq!(meta_value(meta, "title_id"), Some("00050000101BFC00".to_string()));
@@ -736,13 +842,63 @@ mod tests {
     }
 
     #[test]
-    fn superchargers_is_not_read_as_another_game() {
+    fn superchargers_pictures_come_from_its_toy_data() {
+        use crate::igz::tests::{build_objects, build_picture};
+        let output = "Temporary/BuildServer/cafe/Output";
+        let texture = |name: &str| format!("{output}/textures/GuiStandard_diffuse,textures@{name}`tga,101.igz");
+        let icon = |name: &str| format!("!ui!Collections!ToyInventoryIcons!2015Characters!{name}");
+        let material = |name: &str| {
+            let picture = format!("GuiStandard_diffuse,textures@{}`tga,101", icon(name));
+            build_objects(&["igObjectList"], &["GuiStandard", "graphics_effect", &picture, "image"], &[(0, 1), (2, 3)], None, &[], &[], None)
+        };
+        // A picture's pixels: whole micro tiles of blocks, all clear.
+        let picture = build_picture(4, &[0; 1024]);
+        let (normal, legendary) = (material("DriverJetVac"), material("DriverJetVac_Legendary"));
+        let collection = pak::tests::build_chunked(
+            0x0b,
+            &[
+                (&format!("{output}/materialInstances/ToyCollection/Collection_DriverJetVac_Normal.igz"), &normal),
+                (&format!("{output}/materialInstances/ToyCollection/Collection_DriverJetVac_Legendary.igz"), &legendary),
+                (&texture(&icon("DriverJetVac")), &picture),
+                (&texture(&icon("DriverJetVac_Legendary")), &picture),
+            ],
+        );
+        let toy = toys::tests::build_toy(
+            "CFullCharacterToyData",
+            3413,
+            "DriverJetVac",
+            &["Collection_DriverJetVac_Normal", "Collection_DriverJetVac_Legendary"],
+            &[(3, 4, 0x0001_0000)],
+        );
+        // A toy whose material isn't in the collection gets no picture.
+        let unseen = toys::tests::build_toy("CVehicleToyData", 3220, "AirJet", &["Collection_VehicleSparHawk_Normal"], &[]);
+        let toy_data = pak::tests::build_chunked(
+            0x0b,
+            &[
+                (&format!("{output}/ToyData/DriverJetVac_ToyData.igz"), &toy),
+                (&format!("{output}/ToyData/AirJet_ToyData.igz"), &unseen),
+                (&format!("{output}/ToyData/DriverJetVac_ToyData_en.lng"), b"words"),
+                (&texture("!ui!ElementalIcons!DN_SuperCharged"), &picture),
+                (&texture("!levels!Whiterooms!WR_SkyStonesSmash!SkyStonesElementicons_water_C"), &picture),
+            ],
+        );
+        let race_menu = pak::tests::build_chunked(0x0b, &[(&texture("!ui!ActionPacks!RaceMenu!SeaVehicle_Icon"), &picture)]);
+        let hub = pak::tests::build_chunked(0x0b, &[(&texture("!levels!Whiterooms!WR_SkyStonesSmash!SkyStonesElementicons_air_C"), &picture)]);
         let game = std::env::temp_dir().join(format!("omoio-portraits-{}-superchargers", std::process::id()));
-        std::fs::create_dir_all(game.join("meta")).unwrap();
-        let meta = "<menu><title_id type=\"hexBinary\" length=\"8\">00050000101BFC00</title_id></menu>";
-        std::fs::write(game.join("meta").join("meta.xml"), meta).unwrap();
-        assert_eq!(pictures(&game, &game.join("pictures")), Err(SUPERCHARGERS_NOT_YET.to_string()));
-        assert!(!game.join("pictures").exists());
+        for (name, bytes) in [
+            ("ToyCollectionMaterials.pak", &collection),
+            ("permanent.pak", &toy_data),
+            ("AP_RaceSelect.pak", &race_menu),
+            ("Academy.pak", &hub),
+        ] {
+            std::fs::create_dir_all(game.join("content/archives")).unwrap();
+            std::fs::write(game.join("content/archives").join(name), bytes).unwrap();
+        }
+        let folder = game.join("pictures");
+        assert_eq!(pictures(&game, &folder), Ok(7));
+        let mut written: Vec<String> = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        written.sort();
+        assert_eq!(written, ["3413-0000.png", "3413-4403.png", "3413-4503.png", "class-supercharger.png", "element-air.png", "element-water.png", "terrain-sea.png"]);
         std::fs::remove_dir_all(game).unwrap();
     }
 

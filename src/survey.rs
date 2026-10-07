@@ -287,9 +287,6 @@ pub fn survey(game: &Path, word: Option<&str>) -> Result<String, String> {
     let kind = if copy.wua.is_some() { "a .wua" } else { "a game folder" };
     report.line(format!("omoio-portraits {}, survey of {kind}", env!("CARGO_PKG_VERSION")));
     match super::title(game) {
-        Ok(id) if super::is_superchargers(&id) => {
-            report.line(format!("title {id}, Skylanders SuperChargers, which pictures doesn't read yet"))
-        }
         Ok(id) => report.line(format!("title {id}")),
         Err(_) => report.line("title unknown"),
     }
@@ -881,7 +878,7 @@ mod tests {
         let picture = crate::igz::tests::build(8, None, crate::DXT5_TILED, 16, 16, &[0; 256]);
         // A model read as a picture gives a size that makes no sense.
         let model = crate::igz::tests::build(8, None, 0x55118a24, 17292, 5772, &[0; 64]);
-        let newer = b"IGZ\x01\x00\x00\x00\x09 a version not read here";
+        let newer = b"IGZ\x01\x00\x00\x00\x0a a version not read here";
         let garage = crate::pak::tests::build_trap_team(&[
             ("C:/tfb/build/wiiu/ui/vehicles/3220_0_jetstream.png/0x1.png.igb.tex.igz", &picture),
             ("C:/tfb/build/wiiu/ui/vehicles/3221_0_stealthstinger.png/0x2.png.igb.tex.igz", &picture),
@@ -906,7 +903,7 @@ mod tests {
         );
         let report = survey(&folder, None).unwrap();
         for wanted in [
-            "title 00050000101bfc00, Skylanders SuperChargers, which pictures doesn't read yet",
+            "title 00050000101bfc00",
             "  00050000101BFC00, version 0, Skylanders SuperChargers",
             "files 5,",
             "by their first bytes: 3 archives (IGA), 0 pictures outside them (IGZ) and 2 other files",
@@ -920,12 +917,12 @@ mod tests {
             "  C:/tfb/build/wiiu/ui/vehicles: 2",
             "    2 x igz 8, dxt5_tile_cafe, 16 x 16",
             "    3220_0_jetstream.png: igz 8, dxt5_tile_cafe, 16 x 16, ",
-            "    badge_supercharger.png: igz 9, a version not read here, ",
+            "    badge_supercharger.png: igz 10, a version not read here, ",
             "    1 x starts \"FSB5\", such as click.wav",
             "    1 x igz 8, not a picture, such as garage_door.igz",
             "content/levels/level_01.arc: 2 files, 1 picture",
             "    vehicle_shadow.png: igz 8",
-            "the first igz 9, C:/tfb/build/wiiu/ui/badges/badge_supercharger.png/0x3.png.igb.tex.igz in content/misc/ui_garage.arc, starts:",
+            "the first igz 10, C:/tfb/build/wiiu/ui/badges/badge_supercharger.png/0x3.png.igb.tex.igz in content/misc/ui_garage.arc, starts:",
         ] {
             assert!(report.contains(wanted), "{wanted:?} is missing from:\n{report}");
         }

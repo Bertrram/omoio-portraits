@@ -1,7 +1,7 @@
 # omoio-portraits
 
 Reads the figure pictures out of your own copy of Skylanders Spyro's
-Adventure, Giants, SWAP Force or Trap Team, so
+Adventure, Giants, SWAP Force, Trap Team or SuperChargers, so
 [Omoio](https://github.com/Bertrram/omoio)'s portal menu can show each figure
 as the game draws it. Omoio downloads this program only when you ask for the
 pictures, and checks it against a fingerprint before it runs.
@@ -33,9 +33,21 @@ each Skylander whole, as its versus screen shows them, and the element
 symbols. It prints `progress <done> <of>` as it goes and `done <written>` at
 the end.
 
-Spyro's Adventure and Giants on the PS3, and SWAP Force and Trap Team on the
-PS3 and the Wii U, are known so far. SWAP Force and Trap Team give the same
-pictures from either.
+From SuperChargers it writes every toy its Collection screen shows, as the
+game's own toy data names them: each vehicle (ids 3220 to 3241), SuperCharger
+(3400 to 3428), trophy (3500 to 3503) and older figure, with every variant
+the game knows. The ten element symbols are white shapes as for the other
+games, the bolt it shows for a SuperCharger is `class-supercharger.png`, and
+its Land, Sea and Sky symbols are white shapes for Omoio to colour,
+`terrain-land.png`, `terrain-sea.png` and `terrain-sky.png`. A swapper's
+bottom gets its top's picture, as the game shows a swapper by its top. The
+figures of some variants carry a bit, 0x100, that the game's toy data has no
+field for, so each variant's picture is written with that bit and without
+it.
+
+Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team on the PS3
+and the Wii U, and SuperChargers on the Wii U are known so far. SWAP Force and
+Trap Team give the same pictures from either.
 
 `survey` is for working out a game that isn't known yet, and writes nothing.
 It prints the game's title id, its files by kind, each archive with its size,
@@ -43,21 +55,6 @@ its format version and whether it opens here, and the pictures inside that
 look like a menu's, with their size and pixel format. Long lists are cut
 short. Given a word, it prints only the entries whose names hold that word,
 all of them.
-
-### Skylanders SuperChargers
-
-SuperChargers on the Wii U isn't known yet, so `pictures` stops on it with a
-message rather than read it as another game. Once it is known, it will write
-its pictures under these names, so Omoio can look for them already:
-
-- each vehicle (ids 3220 to 3241), SuperCharger (3400 to 3428), trophy (3500
-  to 3503) and older figure as `<id>-<variant>.png`, as for the other games;
-- the element symbols as `element-<name>.png`;
-- the game's badge for a SuperCharger, if it has one, as
-  `class-supercharger.png`;
-- its Land, Sea and Sky symbols, if it has them, as `terrain-land.png`,
-  `terrain-sea.png` and `terrain-sky.png`, white shapes for Omoio to colour,
-  as the element symbols are.
 
 ## Build
 
