@@ -36,6 +36,21 @@ Spyro's Adventure and Giants on the PS3, and SWAP Force and Trap Team on the
 PS3 and the Wii U, are known so far. SWAP Force and Trap Team give the same
 pictures from either.
 
+### Skylanders SuperChargers
+
+SuperChargers on the Wii U isn't known yet, so `pictures` stops on it with a
+message rather than read it as another game. Once it is known, it will write
+its pictures under these names, so Omoio can look for them already:
+
+- each vehicle (ids 3220 to 3241), SuperCharger (3400 to 3428), trophy (3500
+  to 3503) and older figure as `<id>-<variant>.png`, as for the other games;
+- the element symbols as `element-<name>.png`;
+- the game's badge for a SuperCharger, if it has one, as
+  `class-supercharger.png`;
+- its Land, Sea and Sky symbols, if it has them, as `terrain-land.png`,
+  `terrain-sea.png` and `terrain-sky.png`, white shapes for Omoio to colour,
+  as the element symbols are.
+
 ## Build
 
 Needs Rust.

@@ -94,6 +94,13 @@ const SPYRO_ELEMENTS: [(&str, &str); 8] = [
 const PORTRAIT_SIDE: usize = 256;
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
 const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team.";
+/// Skylanders SuperChargers on the Wii U, by the last eight digits of the
+/// title ids Cemu's graphic packs give it, 00050000101BFC00 and
+/// 00050000101B8500, which its update and DLC share. Its files haven't been
+/// seen yet (7 October 2026), so `pictures` stops on it rather than read it
+/// as one of the other games.
+const SUPERCHARGERS: [&str; 2] = ["101bfc00", "101b8500"];
+const SUPERCHARGERS_NOT_YET: &str = "Omoio can't read the figure pictures of Skylanders SuperChargers yet.";
 /// The archive with the town's elemental stones, whose texture has the eight
 /// element symbols as white shapes, four across and two down, in this order
 /// (checked by eye).
@@ -197,11 +204,22 @@ fn title(game: &Path) -> Result<String, String> {
         return sfo_text(&sfo, "TITLE_ID").ok_or_else(unknown);
     }
     let meta = game_file(game, META)?.ok_or_else(unknown)?;
-    let meta = String::from_utf8_lossy(&meta);
-    let (_, rest) = meta.split_once("<title_id").ok_or_else(unknown)?;
-    let (_, rest) = rest.split_once('>').ok_or_else(unknown)?;
-    let (id, _) = rest.split_once('<').ok_or_else(unknown)?;
-    Ok(id.trim().to_ascii_lowercase())
+    let id = meta_value(&String::from_utf8_lossy(&meta), "title_id").ok_or_else(unknown)?;
+    Ok(id.to_ascii_lowercase())
+}
+
+/// A value of a Wii U game's meta.xml, such as its `title_id`.
+fn meta_value(meta: &str, key: &str) -> Option<String> {
+    let (_, rest) = meta.split_once(&format!("<{key}"))?;
+    let (_, rest) = rest.split_once('>')?;
+    let (value, _) = rest.split_once('<')?;
+    Some(value.trim().to_string())
+}
+
+/// Whether a title id, as `title` gives it, is one of Skylanders
+/// SuperChargers on the Wii U: the game's, its update's or its DLC's.
+fn is_superchargers(id: &str) -> bool {
+    id.len() == 16 && SUPERCHARGERS.iter().any(|end| id.ends_with(end))
 }
 
 /// A text value of a PS3 game's PARAM.SFO. After the magic and a version
@@ -232,8 +250,12 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 }
 
 /// Tells the game by its files rather than its title id, so every region's
-/// copy of it is read the same way.
+/// copy of it is read the same way. SuperChargers alone is told by its title
+/// id, as its own files aren't known yet.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
+    if title(game).is_ok_and(|id| is_superchargers(&id)) {
+        return Err(SUPERCHARGERS_NOT_YET.to_string());
+    }
     if let Some(bytes) = data_file(game, PORTRAITS)? {
         return swap_force(game, &bytes, folder);
     }
@@ -682,6 +704,34 @@ mod tests {
         assert_eq!(sfo_text(&sfo, "TITLE"), Some("Skylanders Giants".to_string()));
         assert_eq!(sfo_text(&sfo, "APP_VER"), None);
         assert_eq!(sfo_text(b"PK\x03\x04", "TITLE_ID"), None);
+    }
+
+    #[test]
+    fn superchargers_is_told_by_its_title_ids() {
+        assert!(is_superchargers("00050000101bfc00"));
+        assert!(is_superchargers("00050000101b8500"));
+        assert!(is_superchargers("0005000e101bfc00")); // its update
+        assert!(!is_superchargers("0005000010140400")); // SWAP Force
+        assert!(!is_superchargers("BLES02055"));
+    }
+
+    #[test]
+    fn a_wii_u_game_is_told_by_its_meta_xml() {
+        let meta = "<menu><title_version type=\"unsignedInt\">16</title_version><title_id type=\"hexBinary\" length=\"8\">00050000101BFC00</title_id></menu>";
+        assert_eq!(meta_value(meta, "title_id"), Some("00050000101BFC00".to_string()));
+        assert_eq!(meta_value(meta, "title_version"), Some("16".to_string()));
+        assert_eq!(meta_value(meta, "longname_en"), None);
+    }
+
+    #[test]
+    fn superchargers_is_not_read_as_another_game() {
+        let game = std::env::temp_dir().join(format!("omoio-portraits-{}-superchargers", std::process::id()));
+        std::fs::create_dir_all(game.join("meta")).unwrap();
+        let meta = "<menu><title_id type=\"hexBinary\" length=\"8\">00050000101BFC00</title_id></menu>";
+        std::fs::write(game.join("meta").join("meta.xml"), meta).unwrap();
+        assert_eq!(pictures(&game, &game.join("pictures")), Err(SUPERCHARGERS_NOT_YET.to_string()));
+        assert!(!game.join("pictures").exists());
+        std::fs::remove_dir_all(game).unwrap();
     }
 
     #[test]
