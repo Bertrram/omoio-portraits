@@ -366,6 +366,58 @@ pub fn giants(source: &str) -> Option<(u16, u16)> {
     GIANTS.iter().find(|(name, _, _)| *name == source).map(|&(_, id, variant)| (id, variant))
 }
 
+/// Skylanders Spyro's Adventure's versus screen, which shows each Skylander
+/// whole, 512 x 512, as `<code name>_vs`: the code name and the figure's id.
+/// Each is the plain figure, the only kind the first game reads. Its code
+/// names are not all Giants' ("waterdragon" is Zap here), so the table was
+/// checked by eye.
+pub const SPYROS_ADVENTURE: &[(&str, u16)] = &[
+    ("airdragon", 0),                // Whirlwind
+    ("griffin", 1),                  // Sonic Boom
+    ("skyturtle", 2),                // Warnado
+    ("stormgiant", 3),               // Lightning Rod
+    ("rockdragon", 4),               // Bash
+    ("landshark", 5),                // Terrafin
+    ("dinorang", 6),                 // Dino Rang
+    ("gemgolem", 7),                 // Prism Break
+    ("phoenixdragon", 8),            // Sunburn
+    ("eruptor", 9),                  // Eruptor
+    ("flameknight", 10),             // Ignitor
+    ("fireelf", 11),                 // Flameslinger
+    ("waterdragon", 12),             // Zap
+    ("crustbuckler", 13),            // Wham Shell
+    ("gillgrunt", 14),               // Gill Grunt
+    ("yeti", 15),                    // Slam Bam
+    ("spyrojr", 16),                 // Spyro
+    ("skullorc", 17),                // Voodood
+    ("tikiwizard", 18),              // Double Trouble
+    ("goldencheat", 19),             // Trigger Happy
+    ("metaldragon", 20),             // Drobot
+    ("drillbot", 21),                // Drill Sergeant
+    ("bombtroll", 22),               // Boomer
+    ("forcefieldgrub", 23),          // Wrecking Ball
+    ("plantdragon", 24),             // Camo
+    ("bambazooker", 25),             // Zook
+    ("stealthelf", 26),              // Stealth Elf
+    ("stumpsmashent", 27),           // Stump Smash
+    ("darkspyro", 28),               // Dark Spyro
+    ("shadowmaid", 29),              // Hex
+    ("pandoranguard", 30),           // Chop Chop
+    ("ghosteater", 31),              // Ghost Roaster
+    ("cynder", 32),                  // Cynder
+    ("legendaryrockdragon", 404),    // Legendary Bash
+    ("legendaryspyro", 416),         // Legendary Spyro
+    ("legendarygoldencheat", 419),   // Legendary Trigger Happy
+    ("legendarypandoranguard", 430), // Legendary Chop Chop
+];
+
+/// The figure one of Spyro's Adventure's versus pictures shows, by the
+/// picture's name.
+pub fn spyros_adventure(source: &str) -> Option<u16> {
+    let code = source.strip_suffix("_vs")?;
+    SPYROS_ADVENTURE.iter().find(|(name, _)| *name == code).map(|&(_, id)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,12 +463,26 @@ mod tests {
     }
 
     #[test]
+    fn spyros_adventure_pictures_are_told_by_their_names() {
+        assert_eq!(spyros_adventure("skyturtle_vs"), Some(2));
+        assert_eq!(spyros_adventure("waterdragon_vs"), Some(12));
+        assert_eq!(spyros_adventure("legendaryspyro_vs"), Some(416));
+        assert_eq!(spyros_adventure("eruptorevil_hud"), None);
+        assert_eq!(spyros_adventure("toy_eruptor_hud"), None);
+        assert_eq!(spyros_adventure("eruptor"), None);
+    }
+
+    #[test]
     fn no_figure_has_two_pictures() {
         for table in [PORTRAITS, GIANTS] {
             let mut seen = std::collections::HashSet::new();
             for &(name, id, variant) in table {
                 assert!(seen.insert((id, variant)), "{name} repeats a figure");
             }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for &(name, id) in SPYROS_ADVENTURE {
+            assert!(seen.insert(id), "{name} repeats a figure");
         }
     }
 }

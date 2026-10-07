@@ -1,15 +1,15 @@
 # omoio-portraits
 
-Reads the figure pictures out of your own copy of Skylanders Giants, SWAP
-Force or Trap Team, so
+Reads the figure pictures out of your own copy of Skylanders Spyro's
+Adventure, Giants, SWAP Force or Trap Team, so
 [Omoio](https://github.com/Bertrram/omoio)'s portal menu can show each figure
 as the game draws it. Omoio downloads this program only when you ask for the
 pictures, and checks it against a fingerprint before it runs.
 
 It comes with no pictures and downloads none. Everything it writes comes from
 the game files you already have: for a Wii U game, a `.wua` archive from
-Cemu's Title Manager or an unpacked game folder; for Giants on the PS3, the
-game's folder, the one that holds `PS3_GAME`. It decrypts nothing.
+Cemu's Title Manager or an unpacked game folder; for a PS3 game, the game's
+folder, the one that holds `PS3_GAME`. It decrypts nothing.
 
 ## Use
 
@@ -27,10 +27,14 @@ and sidekick its Collection screen shows, the eight element symbols as
 the Swap Zone badge of each way a swapper moves as `movement-<name>.png`.
 From Trap Team it writes every trap the same way as the figures, and each
 villain as the Villain Vault shows it, in a trap (`villain-<number>.png`) and
-out of one (`villain-<number>-loose.png`). It prints `progress <done> <of>`
-as it goes and `done <written>` at the end.
+out of one (`villain-<number>-loose.png`). From Spyro's Adventure it writes
+each Skylander whole, as its versus screen shows them, and the element
+symbols. It prints `progress <done> <of>` as it goes and `done <written>` at
+the end.
 
-Giants on the PS3, SWAP Force and Trap Team are known so far.
+Spyro's Adventure and Giants on the PS3, and SWAP Force and Trap Team on the
+PS3 and the Wii U, are known so far. SWAP Force and Trap Team give the same
+pictures from either.
 
 ## Build
 

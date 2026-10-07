@@ -1,5 +1,6 @@
 //! Reads the figure pictures out of the user's own copy of Skylanders
-//! Giants, SWAP Force or Trap Team, for Omoio's portal menu. Omoio downloads
+//! Spyro's Adventure, Giants, SWAP Force or Trap Team, for Omoio's portal
+//! menu. Omoio downloads
 //! this program only when the user asks for the pictures, and runs it two
 //! ways:
 //!
@@ -18,7 +19,9 @@
 //! writes every figure, magic item and sidekick its Collection screen shows,
 //! its element symbols, and its badge for a Giant, `class-giant.png`.
 //! SWAP Force and Trap Team give the same pictures from a .wua of the Wii U
-//! version as from a folder of the PS3 one. It
+//! version as from a folder of the PS3 one. From Spyro's Adventure, a PS3
+//! game folder, it writes each Skylander as its versus screen shows them,
+//! whole, and its element symbols. It
 //! prints `progress <done> <of>` as it goes and `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
 
@@ -27,6 +30,7 @@ mod gx2;
 mod igz;
 mod names;
 mod pak;
+mod strm;
 mod wua;
 
 use std::path::{Path, PathBuf};
@@ -70,9 +74,26 @@ const ELEMENTS: [&str; 8] = ["air", "earth", "fire", "life", "magic", "tech", "u
 /// solid, keeping the shape's soft edge and the lines cut into it.
 const GLOW: u32 = 64;
 const GLASS: u32 = 176;
+/// Spyro's Adventure keeps its menus' pictures in one file (see `strm`):
+/// each Skylander whole, 512 pixels square, for its versus screen, and the
+/// element symbols, `elementicon<element>`, whose shapes are their alpha.
+/// The game says death for Undead and mech for Tech.
+const SPYROS_ADVENTURE: &str = "PS3_GAME/USRDIR/uigameimage.str";
+const SPYRO_SYMBOL: &str = "elementicon";
+const SPYRO_ELEMENTS: [(&str, &str); 8] = [
+    ("air", "air"),
+    ("death", "undead"),
+    ("earth", "earth"),
+    ("fire", "fire"),
+    ("life", "life"),
+    ("magic", "magic"),
+    ("mech", "tech"),
+    ("water", "water"),
+];
+/// The size SWAP Force's portraits are, which Omoio shows them at.
+const PORTRAIT_SIDE: usize = 256;
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
-const NOT_KNOWN_GAME: &str =
-    "This game has no figure pictures Omoio can read yet. So far that is Skylanders Giants on the PS3, SWAP Force and Trap Team.";
+const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team.";
 /// The archive with the town's elemental stones, whose texture has the eight
 /// element symbols as white shapes, four across and two down, in this order
 /// (checked by eye).
@@ -221,10 +242,62 @@ fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     if data_file(game, VILLAIN_VAULT)?.is_some() {
         return trap_team(game, folder);
     }
-    match game_file(game, GIANTS)? {
-        Some(bytes) => giants(game, &bytes, folder),
+    if let Some(bytes) = game_file(game, GIANTS)? {
+        return giants(game, &bytes, folder);
+    }
+    match game_file(game, SPYROS_ADVENTURE)? {
+        Some(bytes) => spyros_adventure(&bytes, folder),
         None => Err(NOT_KNOWN_GAME.to_string()),
     }
+}
+
+fn spyros_adventure(bytes: &[u8], folder: &Path) -> Result<usize, String> {
+    let unpacked = strm::unpack(bytes)?;
+    let pictures = strm::pictures(&unpacked)?;
+    std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
+    let steps = pictures.len();
+    let mut written = 0;
+    // The symbols are in the file twice, once for each screen that shows them.
+    let mut symbols_done = Vec::new();
+    for (done, picture) in pictures.iter().enumerate() {
+        println!("progress {done} {steps}");
+        if picture.format != strm::DXT5 {
+            continue;
+        }
+        let figure = names::spyros_adventure(&picture.name);
+        let element = picture
+            .name
+            .strip_prefix(SPYRO_SYMBOL)
+            .and_then(|own| SPYRO_ELEMENTS.iter().find(|(game, _)| *game == own))
+            .map(|&(_, omoio)| omoio)
+            .filter(|element| !symbols_done.contains(element));
+        if figure.is_none() && element.is_none() {
+            continue;
+        }
+        symbols_done.extend(element);
+        let (width, height) = (picture.width, picture.height);
+        let blocks = picture.pixels.get(..width * height).ok_or("A picture in the game is shorter than its size says.")?;
+        let mut rgba = dxt5::decode(&strm::blocks(blocks), width, height);
+        if let Some(id) = figure {
+            let small = shrink(&rgba, width, height, PORTRAIT_SIDE);
+            write(&folder.join(format!("{id}-0000.png")), PORTRAIT_SIDE, PORTRAIT_SIDE, &small)?;
+        } else if let Some(element) = element {
+            for pixel in rgba.chunks_exact_mut(4) {
+                pixel[..3].fill(255);
+            }
+            // Every symbol has a mark of ten pixels in its last 4 x 4 corner,
+            // well apart from the shape, which would show as a speck.
+            for y in height - 4..height {
+                for x in width - 4..width {
+                    rgba[(y * width + x) * 4 + 3] = 0;
+                }
+            }
+            write(&folder.join(format!("element-{element}.png")), width, height, &rgba)?;
+        }
+        written += 1;
+    }
+    println!("progress {steps} {steps}");
+    Ok(written)
 }
 
 fn swap_force(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String> {
