@@ -16,6 +16,7 @@ folder, the one that holds `PS3_GAME`. It decrypts nothing.
 ```
 omoio-portraits title <game.wua or game folder>
 omoio-portraits pictures <game.wua or game folder> <folder>
+omoio-portraits survey <game.wua or game folder> [<word>]
 ```
 
 `title` prints the game's title id, a PS3 game's from its `PARAM.SFO`.
@@ -35,6 +36,13 @@ the end.
 Spyro's Adventure and Giants on the PS3, and SWAP Force and Trap Team on the
 PS3 and the Wii U, are known so far. SWAP Force and Trap Team give the same
 pictures from either.
+
+`survey` is for working out a game that isn't known yet, and writes nothing.
+It prints the game's title id, its files by kind, each archive with its size,
+its format version and whether it opens here, and the pictures inside that
+look like a menu's, with their size and pixel format. Long lists are cut
+short. Given a word, it prints only the entries whose names hold that word,
+all of them.
 
 ### Skylanders SuperChargers
 

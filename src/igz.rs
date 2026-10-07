@@ -70,11 +70,23 @@ fn be32(bytes: &[u8], at: usize) -> Option<u32> {
     bytes.get(at..at + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()))
 }
 
-pub fn read(bytes: &[u8]) -> Option<Picture> {
+/// The file's version, known here or not. `None` when it isn't in the
+/// game's own format.
+pub fn version(bytes: &[u8]) -> Option<u32> {
     if be32(bytes, 0)? != MAGIC {
         return None;
     }
-    let (object_section, size_in_object) = match be32(bytes, 4)? {
+    be32(bytes, 4)
+}
+
+/// Whether files of this version are read here, as single pictures or as
+/// Giants' screens.
+pub fn known(version: u32) -> bool {
+    matches!(version, GIANTS | SWAP_FORCE | TRAP_TEAM)
+}
+
+pub fn read(bytes: &[u8]) -> Option<Picture> {
+    let (object_section, size_in_object) = match version(bytes)? {
         SWAP_FORCE => SWAP_FORCE_OBJECT,
         TRAP_TEAM => TRAP_TEAM_OBJECT,
         _ => return None,
@@ -165,7 +177,7 @@ fn object_starts(packed: &[u8], count: usize) -> Option<Vec<usize>> {
 /// one file. `None` when the file isn't one; pictures that don't read are
 /// left out.
 pub fn screen(bytes: &[u8]) -> Option<Vec<Picture>> {
-    if be32(bytes, 0)? != MAGIC || be32(bytes, 4)? != GIANTS {
+    if version(bytes)? != GIANTS {
         return None;
     }
     let mut sections = Vec::new();
@@ -233,13 +245,13 @@ pub fn screen(bytes: &[u8]) -> Option<Vec<Picture>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A picture file laid out the way the game's are, with `pixels` for
     /// its pixel data. Trap Team's have no strings and no list section, so
     /// `path` is left out for them.
-    fn build(version: u32, path: Option<&str>, format: u32, width: u16, height: u16, pixels: &[u8]) -> Vec<u8> {
+    pub(crate) fn build(version: u32, path: Option<&str>, format: u32, width: u16, height: u16, pixels: &[u8]) -> Vec<u8> {
         let mut out = vec![0; 0x800];
         out[0..4].copy_from_slice(&MAGIC.to_be_bytes());
         out[4..8].copy_from_slice(&version.to_be_bytes());
@@ -309,6 +321,15 @@ mod tests {
         assert_eq!(picture.format, 0x98cb_2a65);
         assert_eq!((picture.width, picture.height), (171, 171));
         assert_eq!(picture.pixels, pixels);
+    }
+
+    #[test]
+    fn a_file_tells_its_version_even_when_not_known() {
+        assert_eq!(version(&build(TRAP_TEAM, None, 0, 4, 4, &[0; 16])), Some(TRAP_TEAM));
+        assert_eq!(version(b"IGZ\x01\x00\x00\x00\x09"), Some(9));
+        assert!(known(GIANTS) && known(TRAP_TEAM) && !known(9));
+        assert!(read(b"IGZ\x01\x00\x00\x00\x09 and a version not known").is_none());
+        assert_eq!(version(b"IGA\x1a"), None);
     }
 
     #[test]

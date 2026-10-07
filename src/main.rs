@@ -24,6 +24,15 @@
 //! whole, and its element symbols. It
 //! prints `progress <done> <of>` as it goes and `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
+//!
+//! A third way is for working out a game that isn't known yet:
+//!
+//!     omoio-portraits survey <game.wua or game folder> [<word>]
+//!
+//! prints what a reader of its pictures would need to know and writes
+//! nothing (see `survey`). Skylanders SuperChargers is such a game, and
+//! `pictures` stops on it with a plain message rather than read it as
+//! another.
 
 mod dxt5;
 mod gx2;
@@ -31,6 +40,7 @@ mod igz;
 mod names;
 mod pak;
 mod strm;
+mod survey;
 mod wua;
 
 use std::path::{Path, PathBuf};
@@ -141,13 +151,15 @@ fn dxt5(format: u32) -> bool {
     format == DXT5_TILED || DXT5_PS3.contains(&format)
 }
 
-const USAGE: &str = "Usage: omoio-portraits title <game.wua or game folder>\n       omoio-portraits pictures <game.wua or game folder> <folder>";
+const USAGE: &str = "Usage: omoio-portraits title <game.wua or game folder>\n       omoio-portraits pictures <game.wua or game folder> <folder>\n       omoio-portraits survey <game.wua or game folder> [<word>]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["title", game] => title(Path::new(game)).map(|id| println!("title {id}")),
         ["pictures", game, folder] => pictures(Path::new(game), Path::new(folder)).map(|n| println!("done {n}")),
+        ["survey", game] => survey::survey(Path::new(game), None).map(|report| print!("{report}")),
+        ["survey", game, word] => survey::survey(Path::new(game), Some(word)).map(|report| print!("{report}")),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

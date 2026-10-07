@@ -35,7 +35,7 @@ pub struct Archive {
 pub struct Entry {
     pub path: String,
     offset: u64,
-    size: u64,
+    pub size: u64,
 }
 
 fn be16(bytes: &[u8], at: usize) -> u16 {
@@ -160,9 +160,16 @@ impl Archive {
     }
 
     pub fn read(&mut self, entry: &Entry) -> Result<Vec<u8>, String> {
-        let mut bytes = Vec::with_capacity(entry.size as usize);
-        let end = entry.offset + entry.size;
-        let mut at = entry.offset;
+        self.read_range(entry, 0, entry.size)
+    }
+
+    /// `length` bytes of a file from `start`, fewer where the file ends. Only
+    /// the blocks they lie in are unpacked.
+    pub fn read_range(&mut self, entry: &Entry, start: u64, length: u64) -> Result<Vec<u8>, String> {
+        let length = length.min(entry.size.saturating_sub(start));
+        let mut bytes = Vec::with_capacity(length as usize);
+        let end = entry.offset + start + length;
+        let mut at = entry.offset + start;
         while at < end {
             let block = self.block((at / BLOCK as u64) as usize)?;
             let from = (at % BLOCK as u64) as usize;
@@ -178,13 +185,13 @@ impl Archive {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A small archive the way Cemu lays one out: `content/a.bin` holding
     /// `data`, each block compressed unless that saves nothing, when it is
     /// stored as it is.
-    fn build(data: &[u8]) -> Vec<u8> {
+    pub(crate) fn build(data: &[u8]) -> Vec<u8> {
         let blocks: Vec<Vec<u8>> = data
             .chunks(BLOCK)
             .map(|chunk| {
@@ -263,6 +270,10 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "content/a.bin");
         assert_eq!(archive.read(&files[0]).unwrap(), data);
+        // A part across the two blocks, and one that runs past the file's end.
+        assert_eq!(archive.read_range(&files[0], BLOCK as u64 - 3, 10).unwrap(), data[BLOCK - 3..BLOCK + 7]);
+        assert_eq!(archive.read_range(&files[0], data.len() as u64 - 4, 100).unwrap(), data[data.len() - 4..]);
+        assert!(archive.read_range(&files[0], data.len() as u64 + 1, 8).unwrap().is_empty());
         std::fs::remove_file(path).unwrap();
     }
 

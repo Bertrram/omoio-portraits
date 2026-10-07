@@ -46,8 +46,26 @@ pub struct Pak<'a> {
 pub struct PakFile {
     pub name: String,
     offset: usize,
-    size: usize,
+    /// Its size once unpacked.
+    pub size: usize,
     mode: u32,
+}
+
+type Word = fn(&[u8], usize) -> Option<usize>;
+
+/// What an archive's first bytes say about it: which way round its numbers
+/// are, where its descriptors start and how long each is, where in one the
+/// file's offset, size and mode are, how many files it has, its alignment,
+/// and where its names start. In every version seen the names are at the
+/// end, after the files.
+pub struct Head {
+    word: Word,
+    descriptors: usize,
+    descriptor: usize,
+    fields: [usize; 3],
+    count: usize,
+    align: usize,
+    pub names: usize,
 }
 
 fn be32(bytes: &[u8], at: usize) -> Option<usize> {
@@ -62,46 +80,93 @@ fn not_known() -> String {
     "The game's picture archive isn't in a form Omoio knows.".to_string()
 }
 
-pub fn open(bytes: &[u8]) -> Result<Pak<'_>, String> {
-    let little = le32(bytes, 0) == Some(MAGIC as usize);
-    // Which way round the numbers are, where the names start, where the
-    // checksums start, how long a descriptor is, and where in one the file's
-    // offset, size and mode are.
-    let (word, names_at, checksums, descriptor, [offset_at, size_at, mode_at]): (
-        fn(&[u8], usize) -> Option<usize>,
-        usize,
-        usize,
-        usize,
-        [usize; 3],
-    ) = if be32(bytes, 0) == Some(MAGIC as usize) && be32(bytes, 4) == Some(SWAP_FORCE as usize) {
-        (be32, 0x2c, DESCRIPTORS, 16, [4, 8, 12])
-    } else if little && le32(bytes, 4) == Some(TRAP_TEAM as usize) {
-        (le32, 0x28, DESCRIPTORS, 16, [0, 8, 12])
-    } else if little && le32(bytes, 4) == Some(GIANTS as usize) {
-        (le32, 0x1c, GIANTS_DESCRIPTORS, 12, [0, 4, 8])
+/// The archive's version and whether its header is little-endian, known
+/// here or not. `None` when it isn't one of the game's archives.
+pub fn version(bytes: &[u8]) -> Option<(u32, bool)> {
+    if be32(bytes, 0)? == MAGIC as usize {
+        Some((be32(bytes, 4)? as u32, false))
+    } else if le32(bytes, 0)? == MAGIC as usize {
+        Some((le32(bytes, 4)? as u32, true))
     } else {
-        return Err(not_known());
-    };
-    let count = word(bytes, 0x0c).ok_or_else(not_known)?;
-    let align = word(bytes, 0x10).ok_or_else(not_known)?.max(1);
-    let names = word(bytes, names_at).ok_or_else(not_known)?;
-    // Each file has a four-byte checksum before the descriptors start.
-    let descriptors = checksums + count * 4;
-    let files = (0..count)
-        .map(|index| {
-            let at = descriptors + index * descriptor;
-            let name_at = names + word(bytes, names + index * 4)?;
-            let length = bytes.get(name_at..)?.iter().position(|&b| b == 0)?;
-            Some(PakFile {
-                name: String::from_utf8_lossy(&bytes[name_at..name_at + length]).into_owned(),
-                offset: word(bytes, at + offset_at)?,
-                size: word(bytes, at + size_at)?,
-                mode: word(bytes, at + mode_at)? as u32,
-            })
+        None
+    }
+}
+
+impl Head {
+    /// Reads the head from the archive's first 0x40 bytes or more.
+    pub fn read(bytes: &[u8]) -> Result<Head, String> {
+        // Where the names' offset is kept, where the checksums start, and
+        // the descriptors' layout, for each version.
+        let (word, names_at, checksums, descriptor, fields): (Word, usize, usize, usize, [usize; 3]) = match version(bytes) {
+            Some((SWAP_FORCE, false)) => (be32, 0x2c, DESCRIPTORS, 16, [4, 8, 12]),
+            Some((TRAP_TEAM, true)) => (le32, 0x28, DESCRIPTORS, 16, [0, 8, 12]),
+            Some((GIANTS, true)) => (le32, 0x1c, GIANTS_DESCRIPTORS, 12, [0, 4, 8]),
+            _ => return Err(not_known()),
+        };
+        let count = word(bytes, 0x0c).ok_or_else(not_known)?;
+        Ok(Head {
+            word,
+            // Each file has a four-byte checksum before the descriptors start.
+            descriptors: checksums + count * 4,
+            descriptor,
+            fields,
+            count,
+            align: word(bytes, 0x10).ok_or_else(not_known)?.max(1),
+            names: word(bytes, names_at).ok_or_else(not_known)?,
         })
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(not_known)?;
-    Ok(Pak { bytes, align, files })
+    }
+
+    /// How many of the archive's first bytes hold the head, the checksums
+    /// and the descriptors.
+    pub fn length(&self) -> usize {
+        self.descriptors + self.count * self.descriptor
+    }
+
+    /// The files, from the archive's first `length()` bytes or more, and its
+    /// bytes from where the names start.
+    pub fn files(&self, start: &[u8], names: &[u8]) -> Result<Vec<PakFile>, String> {
+        let word = self.word;
+        let [offset_at, size_at, mode_at] = self.fields;
+        (0..self.count)
+            .map(|index| {
+                let at = self.descriptors + index * self.descriptor;
+                let name_at = word(names, index * 4)?;
+                let length = names.get(name_at..)?.iter().position(|&b| b == 0)?;
+                Some(PakFile {
+                    name: String::from_utf8_lossy(&names[name_at..name_at + length]).into_owned(),
+                    offset: word(start, at + offset_at)?,
+                    size: word(start, at + size_at)?,
+                    mode: word(start, at + mode_at)? as u32,
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(not_known)
+    }
+}
+
+pub fn open(bytes: &[u8]) -> Result<Pak<'_>, String> {
+    let head = Head::read(bytes)?;
+    let files = head.files(bytes, bytes.get(head.names..).ok_or_else(not_known)?)?;
+    Ok(Pak { bytes, align: head.align, files })
+}
+
+impl PakFile {
+    /// Where the file's bytes are in the archive and how many, when it is
+    /// stored as it is, so it can be read without the rest.
+    pub fn stored_at(&self) -> Option<(usize, usize)> {
+        (self.mode >> 24 == STORED).then_some((self.offset, self.size))
+    }
+
+    /// How the file is kept: as it is, deflated, packed with LZMA, or some
+    /// other way, given by its number, which nothing here unpacks.
+    pub fn packing(&self) -> String {
+        match self.mode >> 24 {
+            STORED => "stored".to_string(),
+            kind if DEFLATED.contains(&kind) => "deflate".to_string(),
+            LZMA => "lzma".to_string(),
+            kind => format!("packing 0x{kind:02x}"),
+        }
+    }
 }
 
 impl Pak<'_> {
@@ -175,7 +240,7 @@ fn unlzma(packed: &[u8], length: usize, size: usize) -> Option<(Vec<u8>, usize)>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use flate2::write::DeflateEncoder;
     use flate2::Compression;
@@ -219,6 +284,8 @@ mod tests {
         let pak = open(&bytes).unwrap();
         assert_eq!(pak.files.len(), 1);
         assert_eq!(pak.files[0].name, "textures\\a.igz");
+        assert_eq!(pak.files[0].packing(), "deflate");
+        assert_eq!(pak.files[0].stored_at(), None);
         assert_eq!(pak.read(&pak.files[0]).unwrap(), data);
     }
 
@@ -230,7 +297,7 @@ mod tests {
     /// A Trap Team archive of files stored whole, laid out as the
     /// game's are: little-endian, offset first in each descriptor, and the
     /// names' offset at 0x28.
-    fn build_trap_team(files: &[(&str, &[u8])]) -> Vec<u8> {
+    pub(crate) fn build_trap_team(files: &[(&str, &[u8])]) -> Vec<u8> {
         let count = files.len();
         let mut out = vec![0; DESCRIPTORS + count * 20];
         out[0..4].copy_from_slice(&MAGIC.to_le_bytes());
@@ -324,8 +391,31 @@ mod tests {
         assert_eq!(pak.files.len(), 2);
         assert_eq!(pak.files[0].name, "level.bld");
         assert_eq!(pak.files[1].name, "ENGLISH.pak");
+        assert_eq!(pak.files[0].packing(), "lzma");
         assert_eq!(pak.read(&pak.files[0]).unwrap(), packed);
         assert_eq!(pak.read(&pak.files[1]).unwrap(), b"IGZ\x01 stored whole");
+    }
+
+    #[test]
+    fn an_archive_is_listed_from_its_start_and_its_names() {
+        let bytes = build_trap_team(&[("a.igz", &[1; 3000]), ("ui/b.png/0x2.igz", b"IGZ\x01")]);
+        let head = Head::read(&bytes[..0x40]).unwrap();
+        let files = head.files(&bytes[..head.length()], &bytes[head.names..]).unwrap();
+        let names: Vec<_> = files.iter().map(|file| (file.name.as_str(), file.size, file.packing())).collect();
+        assert_eq!(names, [("a.igz", 3000, "stored".to_string()), ("ui/b.png/0x2.igz", 4, "stored".to_string())]);
+        let (offset, size) = files[1].stored_at().unwrap();
+        assert_eq!(&bytes[offset..offset + size], b"IGZ\x01");
+        // The descriptors end well before the files, so the start alone holds them.
+        assert!(head.length() < 0x800);
+    }
+
+    #[test]
+    fn an_archive_tells_its_version_even_when_not_known() {
+        assert_eq!(version(&build("a", b"x")), Some((SWAP_FORCE, false)));
+        assert_eq!(version(&build_trap_team(&[("a", b"x")])), Some((TRAP_TEAM, true)));
+        assert_eq!(version(b"IGA\x1a\x0c\x00\x00\x00"), Some((12, true)));
+        assert!(Head::read(b"IGA\x1a\x0c\x00\x00\x00 and a version not known").is_err());
+        assert_eq!(version(b"PK\x03\x04 not one"), None);
     }
 
     #[test]
