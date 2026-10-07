@@ -16,7 +16,9 @@
 //! names, and each villain in a trap and out of one, `villain-<number>.png`
 //! and `villain-<number>-loose.png`. From Giants, a PS3 game folder, it
 //! writes every figure, magic item and sidekick its Collection screen shows,
-//! its element symbols, and its badge for a Giant, `class-giant.png`. It
+//! its element symbols, and its badge for a Giant, `class-giant.png`.
+//! SWAP Force and Trap Team give the same pictures from a .wua of the Wii U
+//! version as from a folder of the PS3 one. It
 //! prints `progress <done> <of>` as it goes and `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
 
@@ -30,15 +32,20 @@ mod wua;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+/// Where the game's own files start: on the Wii U in `content`, on the PS3
+/// in `PS3_GAME/USRDIR`. SWAP Force and Trap Team keep the same archives
+/// under the same names on both.
+const ROOTS: [&str; 2] = ["content/", "PS3_GAME/USRDIR/"];
 /// The archive in SWAP Force that holds every figure's portrait.
-const PORTRAITS: &str = "content/archives/characterillustrations.pak";
+const PORTRAITS: &str = "archives/characterillustrations.pak";
 /// Trap Team's pictures, each in the archive of the screen that shows them:
 /// the Collection screen's figures, its traps, and the Villain Vault.
 const TRAP_TEAM: [&str; 3] = [
-    "content/misc/UI_Collection_Champions.arc",
-    "content/misc/ui_collection_traps.arc",
-    "content/misc/ui_villainvault_stream.arc",
+    "misc/UI_Collection_Champions.arc",
+    "misc/ui_collection_traps.arc",
+    VILLAIN_VAULT,
 ];
+const VILLAIN_VAULT: &str = "misc/ui_villainvault_stream.arc";
 /// Giants keeps each of its screens in an archive of its own: the Collection
 /// screen's has a picture of every figure, and the card game's the element
 /// symbols. The screen itself is the archive's `level.bld`; its other files
@@ -69,12 +76,12 @@ const NOT_KNOWN_GAME: &str =
 /// The archive with the town's elemental stones, whose texture has the eight
 /// element symbols as white shapes, four across and two down, in this order
 /// (checked by eye).
-const SYMBOLS: &str = "content/archives/town3_elementalstones.pak";
+const SYMBOLS: &str = "archives/town3_elementalstones.pak";
 const SYMBOLS_PICTURE: &str = "_elementIcons_D";
 const SYMBOL_ORDER: [&str; 8] = ["tech", "water", "air", "undead", "magic", "life", "fire", "earth"];
 /// The archive of the pictures a level's list of Swap Zones shows: the
 /// zone's badge, a hexagon standing on a point, on a piece of the level.
-const ZONES: &str = "content/archives/collectibleicons.pak";
+const ZONES: &str = "archives/collectibleicons.pak";
 /// The eight ways a swapper moves, as Omoio names them, and how the game
 /// ends the names of their Swap Zone pictures ("SZ_Tuto_Dig"). The game
 /// calls sneaking stealth there.
@@ -101,6 +108,10 @@ const DXT5_TILED: u32 = 0x98cb_2a65;
 /// DXT5 as Giants keeps it on the PS3, by the hashes of "dxt5_tile_big_ps3"
 /// and "dxt5_big_ps3": in both the blocks are in rows, as on a PC.
 const DXT5_PS3: [u32; 2] = [0x942d_575f, 0xf8bb_b422];
+
+fn dxt5(format: u32) -> bool {
+    format == DXT5_TILED || DXT5_PS3.contains(&format)
+}
 
 const USAGE: &str = "Usage: omoio-portraits title <game.wua or game folder>\n       omoio-portraits pictures <game.wua or game folder> <folder>";
 
@@ -133,6 +144,17 @@ fn game_file(game: &Path, inside: &str) -> Result<Option<Vec<u8>>, String> {
         Some(file) => archive.read(&file).map(Some),
         None => Ok(None),
     }
+}
+
+/// One of the game's own files, by its path under `content` on the Wii U or
+/// `PS3_GAME/USRDIR` on the PS3.
+fn data_file(game: &Path, inside: &str) -> Result<Option<Vec<u8>>, String> {
+    for root in ROOTS {
+        if let Some(bytes) = game_file(game, &format!("{root}{inside}"))? {
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
 }
 
 /// The folder a game's paths start from. A PS3 game may be given as the
@@ -191,12 +213,17 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 /// Tells the game by its files rather than its title id, so every region's
 /// copy of it is read the same way.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
-    if let Some(bytes) = game_file(game, PORTRAITS)? {
+    if let Some(bytes) = data_file(game, PORTRAITS)? {
         return swap_force(game, &bytes, folder);
+    }
+    // Trap Team on the PS3 has a Collection screen archive named like
+    // Giants', so it is told by its Villain Vault first.
+    if data_file(game, VILLAIN_VAULT)?.is_some() {
+        return trap_team(game, folder);
     }
     match game_file(game, GIANTS)? {
         Some(bytes) => giants(game, &bytes, folder),
-        None => trap_team(game, folder),
+        None => Err(NOT_KNOWN_GAME.to_string()),
     }
 }
 
@@ -212,7 +239,7 @@ fn swap_force(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String>
         let Some(picture) = igz::read(&archive.read(file)?) else {
             continue;
         };
-        if picture.format != DXT5_TILED {
+        if !dxt5(picture.format) {
             continue;
         }
         if let Some((id, variant)) = names::figure(&picture.source) {
@@ -232,7 +259,7 @@ fn swap_force(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String>
 fn trap_team(game: &Path, folder: &Path) -> Result<usize, String> {
     let mut archives = Vec::new();
     for inside in TRAP_TEAM {
-        archives.push(game_file(game, inside)?.ok_or(NOT_KNOWN_GAME)?);
+        archives.push(data_file(game, inside)?.ok_or(NOT_KNOWN_GAME)?);
     }
     // Each archive borrows the bytes read above, so those stay alive in
     // `archives` while the pictures are read out of them.
@@ -251,7 +278,7 @@ fn trap_team(game: &Path, folder: &Path) -> Result<usize, String> {
         let Some(picture) = igz::read(&archive.read(file)?) else {
             continue;
         };
-        if picture.format != DXT5_TILED {
+        if !dxt5(picture.format) {
             continue;
         }
         write(&folder.join(format!("{name}.png")), picture.width, picture.height, &upright(&picture)?)?;
@@ -388,7 +415,7 @@ fn shrink(rgba: &[u8], width: usize, height: usize, side: usize) -> Vec<u8> {
 /// The eight element symbols, written as `element-<name>.png`. A game
 /// without the town's stones just has none.
 fn symbols(game: &Path, folder: &Path) -> Result<usize, String> {
-    let Some(bytes) = game_file(game, SYMBOLS)? else {
+    let Some(bytes) = data_file(game, SYMBOLS)? else {
         return Ok(0);
     };
     let archive = pak::open(&bytes)?;
@@ -396,7 +423,7 @@ fn symbols(game: &Path, folder: &Path) -> Result<usize, String> {
         let Some(picture) = igz::read(&archive.read(file)?) else {
             continue;
         };
-        if picture.source != SYMBOLS_PICTURE || picture.format != DXT5_TILED {
+        if picture.source != SYMBOLS_PICTURE || !dxt5(picture.format) {
             continue;
         }
         let rows = upright(&picture)?;
@@ -420,7 +447,7 @@ fn symbols(game: &Path, folder: &Path) -> Result<usize, String> {
 /// pictures and written as `movement-<name>.png`. A game without Swap Zones
 /// just has none.
 fn movements(game: &Path, folder: &Path) -> Result<usize, String> {
-    let Some(bytes) = game_file(game, ZONES)? else {
+    let Some(bytes) = data_file(game, ZONES)? else {
         return Ok(0);
     };
     let archive = pak::open(&bytes)?;
@@ -435,7 +462,7 @@ fn movements(game: &Path, folder: &Path) -> Result<usize, String> {
         let Some(index) = MOVEMENTS.iter().position(|(_, ending)| source.ends_with(ending)) else {
             continue;
         };
-        if done[index] || picture.format != DXT5_TILED || (picture.width, picture.height) != (ZONE_SIZE, ZONE_SIZE) {
+        if done[index] || !dxt5(picture.format) || (picture.width, picture.height) != (ZONE_SIZE, ZONE_SIZE) {
             continue;
         }
         let rows = upright(&picture)?;
