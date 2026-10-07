@@ -7,6 +7,22 @@
 //! The layout follows the community's notes on the format and was checked
 //! against the game's files.
 //!
+//! Which chunks are packed, and where each starts, is in three tables after
+//! the descriptors, whose lengths the header gives at 0x1C, 0x20 and 0x24:
+//! 32-bit, 16-bit and 8-bit numbers. Each is where a chunk starts, in
+//! sectors of the archive's alignment from the file's own start, with its
+//! top bit set when the chunk is packed, and each file has one for every
+//! chunk and one more for its end. A file of up to 0x7F sectors uses the
+//! 8-bit table, one of up to 0x7FFF the 16-bit table and a longer one the
+//! 32-bit table; the low 28 bits of its mode say where its numbers start.
+//! This follows LG-RZ's igArchiveLib (MIT, read 7 October 2026) and was
+//! checked against every archive of SWAP Force on the PS3 and of
+//! SuperChargers on the Wii U the same day: each table is used exactly
+//! once by the files that point into it, every file starts at sector 0 and
+//! ends on a number without the top bit. Before, a chunk stored whole was
+//! told by its not inflating, which mistook one whose first bytes happen to
+//! inflate (SuperChargers has four).
+//!
 //! Skylanders Trap Team (.arc and .bld) writes version 11 with its header
 //! little-endian: the descriptor's offset moves to its first word and the
 //! names' offset to 0x28. Every picture in it is stored whole; its packed
@@ -18,6 +34,16 @@
 //! pack their files with LZMA, in chunks laid out as SWAP Force's are; a
 //! packed chunk's stream starts with the coder's five bytes of settings,
 //! which its length leaves out.
+//!
+//! Skylanders SuperChargers on the Wii U writes version 11 as Trap Team
+//! does, but big-endian and laid out as SWAP Force's version 10 in every
+//! other way: the names' offset at 0x2C, the descriptor's offset in its
+//! second word, the chunk tables, and its files deflated in the same
+//! chunks. NefariousTechSupport's igArchiveExtractor (GPL-3.0, read
+//! 7 October 2026) lists the same offsets for it. Checked against all 6237
+//! archives of the game the same day: every packed file of all 270,576
+//! inflates to its size. Some, which hold no files, end before where their
+//! names would start.
 
 use flate2::read::DeflateDecoder;
 use lzma_rust2::LzmaReader;
@@ -27,12 +53,18 @@ const MAGIC: u32 = 0x1a41_4749;
 const GIANTS: u32 = 0x08;
 const SWAP_FORCE: u32 = 0x0a;
 const TRAP_TEAM: u32 = 0x0b;
+const SUPERCHARGERS: u32 = 0x0b;
 const CHUNK: usize = 0x8000;
 const DESCRIPTORS: usize = 0x38;
 const GIANTS_DESCRIPTORS: usize = 0x34;
 const STORED: u32 = 0xff;
 const DEFLATED: [u32; 2] = [0x00, 0x10];
 const LZMA: u32 = 0x20;
+/// The part of a packed file's mode that says where its chunk numbers start.
+const BLOCK_INDEX: u32 = 0x0fff_ffff;
+/// The longest files, in sectors, the 8-bit and the 16-bit tables are for.
+const SMALL_SECTORS: usize = 0x7f;
+const MEDIUM_SECTORS: usize = 0x7fff;
 /// The settings Giants packs every chunk with: lc 3, lp 0 and pb 2, and a
 /// dictionary as big as a chunk.
 const LZMA_SETTINGS: [u8; 5] = [0x5d, 0x00, 0x80, 0x00, 0x00];
@@ -40,6 +72,9 @@ const LZMA_SETTINGS: [u8; 5] = [0x5d, 0x00, 0x80, 0x00, 0x00];
 pub struct Pak<'a> {
     bytes: &'a [u8],
     align: usize,
+    /// Where the 32-bit, 16-bit and 8-bit chunk tables start, in the
+    /// versions that have them.
+    tables: Option<[usize; 3]>,
     pub files: Vec<PakFile>,
 }
 
@@ -65,6 +100,9 @@ pub struct Head {
     fields: [usize; 3],
     count: usize,
     align: usize,
+    /// How many numbers each chunk table holds, in the versions that have
+    /// them.
+    tables: Option<[usize; 3]>,
     pub names: usize,
 }
 
@@ -95,15 +133,18 @@ pub fn version(bytes: &[u8]) -> Option<(u32, bool)> {
 impl Head {
     /// Reads the head from the archive's first 0x40 bytes or more.
     pub fn read(bytes: &[u8]) -> Result<Head, String> {
-        // Where the names' offset is kept, where the checksums start, and
-        // the descriptors' layout, for each version.
-        let (word, names_at, checksums, descriptor, fields): (Word, usize, usize, usize, [usize; 3]) = match version(bytes) {
-            Some((SWAP_FORCE, false)) => (be32, 0x2c, DESCRIPTORS, 16, [4, 8, 12]),
-            Some((TRAP_TEAM, true)) => (le32, 0x28, DESCRIPTORS, 16, [0, 8, 12]),
-            Some((GIANTS, true)) => (le32, 0x1c, GIANTS_DESCRIPTORS, 12, [0, 4, 8]),
-            _ => return Err(not_known()),
-        };
-        let count = word(bytes, 0x0c).ok_or_else(not_known)?;
+        // Where the names' offset is kept, where the checksums start, the
+        // descriptors' layout, and whether chunk tables follow them, for
+        // each version.
+        let (word, names_at, checksums, descriptor, fields, chunked): (Word, usize, usize, usize, [usize; 3], bool) =
+            match version(bytes) {
+                Some((SWAP_FORCE | SUPERCHARGERS, false)) => (be32, 0x2c, DESCRIPTORS, 16, [4, 8, 12], true),
+                Some((TRAP_TEAM, true)) => (le32, 0x28, DESCRIPTORS, 16, [0, 8, 12], false),
+                Some((GIANTS, true)) => (le32, 0x1c, GIANTS_DESCRIPTORS, 12, [0, 4, 8], false),
+                _ => return Err(not_known()),
+            };
+        let at = |offset: usize| word(bytes, offset).ok_or_else(not_known);
+        let count = at(0x0c)?;
         Ok(Head {
             word,
             // Each file has a four-byte checksum before the descriptors start.
@@ -111,8 +152,9 @@ impl Head {
             descriptor,
             fields,
             count,
-            align: word(bytes, 0x10).ok_or_else(not_known)?.max(1),
-            names: word(bytes, names_at).ok_or_else(not_known)?,
+            align: at(0x10)?.max(1),
+            tables: if chunked { Some([at(0x1c)?, at(0x20)?, at(0x24)?]) } else { None },
+            names: at(names_at)?,
         })
     }
 
@@ -147,7 +189,12 @@ impl Head {
 pub fn open(bytes: &[u8]) -> Result<Pak<'_>, String> {
     let head = Head::read(bytes)?;
     let files = head.files(bytes, bytes.get(head.names..).ok_or_else(not_known)?)?;
-    Ok(Pak { bytes, align: head.align, files })
+    // The tables follow the descriptors, the 32-bit one first.
+    let tables = head.tables.map(|[large, medium, _]| {
+        let start = head.length();
+        [start, start + large * 4, start + large * 4 + medium * 2]
+    });
+    Ok(Pak { bytes, align: head.align, tables, files })
 }
 
 impl PakFile {
@@ -186,6 +233,52 @@ impl Pak<'_> {
         } else {
             return Err(not_known());
         };
+        match self.tables {
+            Some(tables) => self.read_by_tables(file, tables, unpack),
+            None => self.read_trying(file, unpack),
+        }
+    }
+
+    /// A packed file chunk by chunk, where the chunk tables say each starts
+    /// and whether it is packed.
+    fn read_by_tables(&self, file: &PakFile, [large, medium, small]: [usize; 3], unpack: Unpack) -> Result<Vec<u8>, String> {
+        let first = (file.mode & BLOCK_INDEX) as usize;
+        let start = |chunk: usize| -> Option<(bool, usize)> {
+            let at = first + chunk;
+            if file.size <= SMALL_SECTORS * self.align {
+                let number = *self.bytes.get(small + at)?;
+                Some((number & 0x80 != 0, usize::from(number & 0x7f)))
+            } else if file.size <= MEDIUM_SECTORS * self.align {
+                let number = self.bytes.get(medium + at * 2..medium + at * 2 + 2)?;
+                let number = u16::from_be_bytes([number[0], number[1]]);
+                Some((number & 0x8000 != 0, usize::from(number & 0x7fff)))
+            } else {
+                let number = be32(self.bytes, large + at * 4)?;
+                Some((number & 0x8000_0000 != 0, number & 0x7fff_ffff))
+            }
+        };
+        let mut out = Vec::with_capacity(file.size);
+        for chunk in 0..file.size.div_ceil(CHUNK) {
+            let (packed, sector) = start(chunk).ok_or_else(not_known)?;
+            let at = file.offset + sector * self.align;
+            let size = (file.size - out.len()).min(CHUNK);
+            let bytes = if packed {
+                let length = self.bytes.get(at..at + 2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])));
+                length.and_then(|length| unpack(self.bytes.get(at + 2..)?, length, size)).map(|(bytes, _)| bytes)
+            } else {
+                self.bytes.get(at..at + size).map(<[u8]>::to_vec)
+            };
+            match bytes {
+                Some(bytes) if bytes.len() == size => out.extend_from_slice(&bytes),
+                _ => return Err(not_known()),
+            }
+        }
+        Ok(out)
+    }
+
+    /// A packed file of an archive without chunk tables, Giants', chunk by
+    /// chunk, each one that doesn't unpack taken as stored whole.
+    fn read_trying(&self, file: &PakFile, unpack: Unpack) -> Result<Vec<u8>, String> {
         let mut out = Vec::with_capacity(file.size);
         let mut at = file.offset;
         while out.len() < file.size {
@@ -218,6 +311,10 @@ impl Pak<'_> {
     }
 }
 
+/// Unpacks one chunk: the bytes after its length, its length, and its size
+/// once unpacked. Gives the chunk and how many bytes it took.
+type Unpack = fn(&[u8], usize, usize) -> Option<(Vec<u8>, usize)>;
+
 /// The deflated chunk at the start of `packed`, `length` long, and how many
 /// bytes it took. `None` when it isn't one.
 fn inflate(packed: &[u8], length: usize, size: usize) -> Option<(Vec<u8>, usize)> {
@@ -247,46 +344,122 @@ pub(crate) mod tests {
     use lzma_rust2::{LzmaOptions, LzmaWriter};
     use std::io::Write;
 
-    /// An archive of one file, `data`, deflated in chunks as the game does.
-    fn build(name: &str, data: &[u8]) -> Vec<u8> {
+    /// An archive laid out as SWAP Force's and SuperChargers' are: big-endian,
+    /// of `version`, each file deflated in chunks, a chunk that doesn't
+    /// shrink stored whole, and the chunk tables saying which is which. A
+    /// file of more than 0x7F sectors goes in the 16-bit table.
+    pub(crate) fn build_chunked(version: u32, files: &[(&str, &[u8])]) -> Vec<u8> {
         let align = 0x800;
-        let mut out = vec![0; DESCRIPTORS + 4 + 16];
-        out[0..4].copy_from_slice(&MAGIC.to_be_bytes());
-        out[4..8].copy_from_slice(&SWAP_FORCE.to_be_bytes());
-        out[0x0c..0x10].copy_from_slice(&1u32.to_be_bytes());
-        out[0x10..0x14].copy_from_slice(&(align as u32).to_be_bytes());
-        let offset = out.len().div_ceil(align) * align;
-        out.resize(offset, 0);
-        for chunk in data.chunks(CHUNK) {
-            let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
-            encoder.write_all(chunk).unwrap();
-            let packed = encoder.finish().unwrap();
-            out.extend_from_slice(&(packed.len() as u16).to_le_bytes());
-            out.extend_from_slice(&packed);
-            out.resize(out.len().div_ceil(align) * align, 0);
+        let count = files.len();
+        // The files first, from 0, with where each chunk starts in sectors
+        // and whether it is packed, then where the file ends.
+        let mut body = Vec::new();
+        let mut placed = Vec::new();
+        for (_, data) in files {
+            let start = body.len();
+            let mut numbers = Vec::new();
+            for chunk in data.chunks(CHUNK) {
+                numbers.push((body.len() - start) / align);
+                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(chunk).unwrap();
+                let packed = encoder.finish().unwrap();
+                if packed.len() + 2 < chunk.len() {
+                    *numbers.last_mut().unwrap() |= 1 << 31;
+                    body.extend_from_slice(&(packed.len() as u16).to_le_bytes());
+                    body.extend_from_slice(&packed);
+                } else {
+                    body.extend_from_slice(chunk);
+                }
+                body.resize(body.len().div_ceil(align) * align, 0);
+            }
+            numbers.push((body.len() - start) / align);
+            placed.push((start, numbers));
         }
+        let (mut medium, mut small, mut modes) = (Vec::new(), Vec::new(), Vec::new());
+        for ((_, data), (_, numbers)) in files.iter().zip(&placed) {
+            let packed = |number: usize| (number >> 31 == 1, number & 0x7fff_ffff);
+            if data.len() <= SMALL_SECTORS * align {
+                modes.push(0x1000_0000 | small.len() as u32);
+                small.extend(numbers.iter().map(|&n| packed(n)).map(|(on, sector)| sector as u8 | u8::from(on) << 7));
+            } else {
+                modes.push(0x1000_0000 | medium.len() as u32);
+                medium.extend(numbers.iter().map(|&n| packed(n)).map(|(on, sector)| sector as u16 | u16::from(on) << 15));
+            }
+        }
+        let tables = DESCRIPTORS + count * 20;
+        let first = (tables + medium.len() * 2 + small.len()).div_ceil(align) * align;
+        let mut out = vec![0; first];
+        let word = |out: &mut Vec<u8>, at: usize, value: usize| out[at..at + 4].copy_from_slice(&(value as u32).to_be_bytes());
+        word(&mut out, 0, MAGIC as usize);
+        word(&mut out, 4, version as usize);
+        word(&mut out, 0x0c, count);
+        word(&mut out, 0x10, align);
+        word(&mut out, 0x20, medium.len());
+        word(&mut out, 0x24, small.len());
+        for (index, ((_, data), (start, _))) in files.iter().zip(&placed).enumerate() {
+            let at = DESCRIPTORS + count * 4 + index * 16;
+            word(&mut out, at + 4, first + start);
+            word(&mut out, at + 8, data.len());
+            word(&mut out, at + 12, modes[index] as usize);
+        }
+        for (k, number) in medium.iter().enumerate() {
+            out[tables + k * 2..tables + k * 2 + 2].copy_from_slice(&u16::to_be_bytes(*number));
+        }
+        out[tables + medium.len() * 2..tables + medium.len() * 2 + small.len()].copy_from_slice(&small);
+        out.extend_from_slice(&body);
         let names = out.len();
-        out.extend_from_slice(&4u32.to_be_bytes());
-        out.extend_from_slice(name.as_bytes());
-        out.push(0);
-        out[0x2c..0x30].copy_from_slice(&(names as u32).to_be_bytes());
-        let at = DESCRIPTORS + 4;
-        out[at + 4..at + 8].copy_from_slice(&(offset as u32).to_be_bytes());
-        out[at + 8..at + 12].copy_from_slice(&(data.len() as u32).to_be_bytes());
-        out[at + 12..at + 16].copy_from_slice(&0x1000_0000u32.to_be_bytes());
+        word(&mut out, 0x2c, names);
+        let mut text = Vec::new();
+        for (name, _) in files {
+            out.extend_from_slice(&((count * 4 + text.len()) as u32).to_be_bytes());
+            text.extend_from_slice(name.as_bytes());
+            text.push(0);
+        }
+        out.extend_from_slice(&text);
         out
+    }
+
+    /// Bytes that don't shrink, from a fixed seed.
+    fn noise(length: usize) -> Vec<u8> {
+        let mut seed = 0x2545_f491_u32;
+        (0..length)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed as u8
+            })
+            .collect()
     }
 
     #[test]
     fn a_deflated_file_reads_back_across_chunks() {
-        let data: Vec<u8> = (0..CHUNK * 2 + 300).map(|i| (i % 97) as u8).collect();
-        let bytes = build("textures\\a.igz", &data);
+        // Its second chunk doesn't shrink, so it is stored whole, and starts
+        // as a chunk of two packed bytes that inflate to nothing would: as
+        // one of SuperChargers' pictures does, taken for a packed chunk when
+        // the tables were not read.
+        let mut data: Vec<u8> = (0..CHUNK).map(|i| (i % 97) as u8).collect();
+        data.extend_from_slice(b"\x02\x00\x03\x00");
+        data.extend(noise(CHUNK - 4));
+        data.extend((0..300).map(|i| (i % 13) as u8));
+        let bytes = build_chunked(SWAP_FORCE, &[("textures\\a.igz", &data)]);
         let pak = open(&bytes).unwrap();
         assert_eq!(pak.files.len(), 1);
         assert_eq!(pak.files[0].name, "textures\\a.igz");
         assert_eq!(pak.files[0].packing(), "deflate");
         assert_eq!(pak.files[0].stored_at(), None);
         assert_eq!(pak.read(&pak.files[0]).unwrap(), data);
+        assert!(pak.read_trying(&pak.files[0], inflate).is_err());
+    }
+
+    #[test]
+    fn a_long_file_is_found_in_the_16_bit_table() {
+        let long: Vec<u8> = (0..SMALL_SECTORS * 0x800 + 5000).map(|i| (i % 251) as u8).collect();
+        let short = noise(5000);
+        let bytes = build_chunked(SUPERCHARGERS, &[("short.igz", &short), ("long.igz", &long), ("last.igz", b"IGZ\x01")]);
+        let pak = open(&bytes).unwrap();
+        let read: Vec<Vec<u8>> = pak.files.iter().map(|file| pak.read(file).unwrap()).collect();
+        assert_eq!(read, [short, long, b"IGZ\x01".to_vec()]);
     }
 
     #[test]
@@ -411,7 +584,8 @@ pub(crate) mod tests {
 
     #[test]
     fn an_archive_tells_its_version_even_when_not_known() {
-        assert_eq!(version(&build("a", b"x")), Some((SWAP_FORCE, false)));
+        assert_eq!(version(&build_chunked(SWAP_FORCE, &[("a", b"x")])), Some((SWAP_FORCE, false)));
+        assert_eq!(version(&build_chunked(SUPERCHARGERS, &[("a", b"x")])), Some((SUPERCHARGERS, false)));
         assert_eq!(version(&build_trap_team(&[("a", b"x")])), Some((TRAP_TEAM, true)));
         assert_eq!(version(b"IGA\x1a\x0c\x00\x00\x00"), Some((12, true)));
         assert!(Head::read(b"IGA\x1a\x0c\x00\x00\x00 and a version not known").is_err());
