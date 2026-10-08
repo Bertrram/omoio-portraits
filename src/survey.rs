@@ -10,6 +10,15 @@
 //! well, it prints only the entries whose names hold that word, all of
 //! them.
 //!
+//! On 8 October 2026, for Skylanders Imaginators, whose files haven't been
+//! seen here either, it came to look for Senseis and Creation Crystals as
+//! well; to tell a file of version 9 that isn't a picture by the kinds of
+//! object it holds, as SuperChargers' toy data was found, and, given a word,
+//! to print the outside names each gives, as its materials and the pictures
+//! they name; and to read a file of a version it doesn't know as version 9
+//! lays one out, saying so, so a newer version that kept that layout still
+//! shows its pictures.
+//!
 //! An archive keeps its names at its end, as every archive of the PS3
 //! copies of Giants, SWAP Force and Trap Team does, so it is listed from its
 //! first bytes and its last ones, and an entry stored as it is is read on
@@ -41,9 +50,10 @@ const PICTURE_ENDING: &str = ".igz";
 /// Words that mark a picture worth printing, anywhere in its name: what the
 /// other games' readers look for (SWAP Force's `Spyro_WiiPortrait`,
 /// `Body_Aviator_Combo` and `_elementIcons_D`, Trap Team's
-/// `collection_images/.../462_12288_snapshot.png`) and what SuperChargers
-/// adds.
-const PICTURE_WORDS: [&str; 13] = [
+/// `collection_images/.../462_12288_snapshot.png`), what SuperChargers
+/// adds, and what Imaginators adds: Senseis, whose battle classes are
+/// covered by "class", and Creation Crystals.
+const PICTURE_WORDS: [&str; 16] = [
     "portrait",
     "illustration",
     "snapshot",
@@ -57,6 +67,9 @@ const PICTURE_WORDS: [&str; 13] = [
     "terrain",
     "class",
     "combo",
+    "sensei",
+    "crystal",
+    "creation",
 ];
 /// Short words that count only on their own, not inside a longer one:
 /// SuperChargers' three terrains, Trap Team's `skylander_toys`, SWAP
@@ -113,6 +126,8 @@ const SHOWN_INSIDE: usize = 15;
 const SHOWN_GROUPS: usize = 10;
 const SHOWN_ALIKE: usize = 3;
 const SHOWN_ENTRIES: usize = 4;
+/// How many of the kinds of object a file holds are named, the first first.
+const SHOWN_HELD: usize = 6;
 
 /// The game's files, from a .wua or from a game folder.
 struct Copy {
@@ -254,8 +269,9 @@ struct Inside {
     files: usize,
     /// The entries that are pictures or may be, by the folder each is in.
     groups: BTreeMap<String, Vec<Item>>,
-    /// The others, by what they are, with their names.
-    others: BTreeMap<String, Vec<String>>,
+    /// The others, by what they are, each with its name and the outside
+    /// names it gives, such as the materials a toy is drawn with.
+    others: BTreeMap<String, Vec<(String, Vec<String>)>>,
 }
 
 impl Inside {
@@ -272,9 +288,9 @@ impl Inside {
         self.groups.entry(folder.to_string()).or_default().push(Item { name: picture.to_string(), kind, more });
     }
 
-    fn add_other(&mut self, name: &str, kind: String) {
+    fn add_other(&mut self, name: &str, kind: String, naming: Vec<String>) {
         let (_, own) = split_entry(name);
-        self.others.entry(kind).or_default().push(own.to_string());
+        self.others.entry(kind).or_default().push((own.to_string(), naming));
     }
 }
 
@@ -590,13 +606,23 @@ fn entries(insides: &mut [Inside], word: Option<&str>, report: &mut Report) {
         }
         if !inside.others.is_empty() {
             let mut others: Vec<_> = inside.others.iter().collect();
-            others.sort_by_key(|(_, names)| std::cmp::Reverse(names.len()));
-            let lines = others.iter().map(|(kind, names)| match word {
-                Some(_) => format!("{} x {kind}: {}", names.len(), names.join(", ")),
-                None => format!("{} x {kind}, such as {}", names.len(), names[0]),
-            });
+            others.sort_by_key(|(_, entries)| std::cmp::Reverse(entries.len()));
             report.line("  not pictures:");
-            report.list("    ", lines, cap(SHOWN_ALIKE), KINDS);
+            // Given a word, each entry is named on a line of its own with the
+            // outside names it gives.
+            if word.is_some() {
+                for (kind, entries) in others {
+                    report.line(format!("    {} x {kind}:", entries.len()));
+                    let lines = entries.iter().map(|(name, naming)| match naming.as_slice() {
+                        [] => name.clone(),
+                        _ => format!("{name}, naming {}", naming.join(", ")),
+                    });
+                    report.all("      ", lines);
+                }
+            } else {
+                let lines = others.iter().map(|(kind, entries)| format!("{} x {kind}, such as {}", entries.len(), entries[0].0));
+                report.list("    ", lines, SHOWN_ALIKE, KINDS);
+            }
         }
     }
     if insides.len() > cap(SHOWN_INSIDE) {
@@ -607,28 +633,47 @@ fn entries(insides: &mut [Inside], word: Option<&str>, report: &mut Report) {
 }
 
 /// Looks at one entry, `bytes` once unpacked: a picture, a screen of
-/// pictures as Giants keeps them, or something else.
+/// pictures as Giants keeps them, or something else. A file of version 9
+/// that isn't a picture is told by the kinds of object it holds, and keeps
+/// the outside names it gives, such as the materials a toy's data names. A
+/// file of a version not read here is read as version 9 lays one out, in
+/// case a newer version kept that layout, and is said to be read so.
 fn look_at(inside: &mut Inside, archive: &str, name: &str, bytes: &[u8], more: String, unknown: &mut Unknown) {
     let Some(version) = igz::version(bytes) else {
-        inside.add_other(name, first_bytes(bytes));
+        inside.add_other(name, first_bytes(bytes), Vec::new());
         return;
     };
-    if !igz::known(version) {
+    let known = igz::known(version);
+    if !known {
         unknown.entry(version).or_insert_with(|| {
             let place = if archive.is_empty() { name.to_string() } else { format!("{name} in {archive}") };
             (place, bytes[..bytes.len().min(HEAD as usize)].to_vec())
         });
-        inside.add(name, format!("igz {version}, a version not read here"), more);
-        return;
     }
-    let mut pictures = match igz::screen(bytes) {
-        Some(pictures) => pictures,
-        None => igz::read(bytes).into_iter().collect(),
+    let objects = if known { igz::Objects::read(bytes) } else { igz::Objects::read_as_version_9(bytes) };
+    let label = match (known, &objects) {
+        (true, _) => format!("igz {version}"),
+        (false, Some(_)) => format!("igz {version} read as igz 9"),
+        (false, None) => {
+            inside.add(name, format!("igz {version}, a version not read here"), more);
+            return;
+        }
+    };
+    let mut pictures = match (igz::screen(bytes), &objects) {
+        (Some(pictures), _) => pictures,
+        (None, Some(objects)) => objects.picture().into_iter().collect(),
+        (None, None) => igz::read(bytes).into_iter().collect(),
     };
     pictures.retain(plausible);
-    let describe = |picture: &igz::Picture| format!("igz {version}, {}, {} x {}", format_name(picture.format), picture.width, picture.height);
+    let describe = |picture: &igz::Picture| format!("{label}, {}, {} x {}", format_name(picture.format), picture.width, picture.height);
     match pictures.as_slice() {
-        [] => inside.add_other(name, format!("igz {version}, not a picture")),
+        [] => match &objects {
+            Some(objects) => {
+                let naming = objects.outside_names().map(|(name, space)| format!("{name} ({space})")).collect();
+                inside.add_other(name, format!("{label}, not a picture, {}", held(objects)), naming);
+            }
+            None => inside.add_other(name, format!("{label}, not a picture"), Vec::new()),
+        },
         [picture] => {
             let (_, own) = split_entry(name);
             let more = match picture.source.as_str() {
@@ -649,6 +694,17 @@ fn look_at(inside: &mut Inside, archive: &str, name: &str, bytes: &[u8], more: S
                 items.push(Item { name: picture.source.clone(), kind: describe(picture), more });
             }
         }
+    }
+}
+
+/// The kinds of object a file holds, the first few, as in `holds
+/// igObjectList, CFullCharacterToyData and 2 more kinds`.
+fn held(objects: &igz::Objects) -> String {
+    let kinds = objects.kinds_held();
+    match kinds.len() {
+        0 => "holds no objects".to_string(),
+        count if count > SHOWN_HELD => format!("holds {} and {}", kinds[..SHOWN_HELD].join(", "), more(count - SHOWN_HELD, KINDS)),
+        _ => format!("holds {}", kinds.join(", ")),
     }
 }
 
@@ -817,6 +873,10 @@ mod tests {
         assert!(entry_looks_wanted("ui/icons/terrain_land.png/0x1.igz"));
         assert!(entry_looks_wanted("ui/VehicleIconSea.png/0x2.igz"));
         assert!(entry_looks_wanted("ui/trophies/3500_0_sky.png/0x3.igz"));
+        // What Imaginators might name its own.
+        assert!(entry_looks_wanted("textures\\!ui!Senseis!KnightSensei`tga.igz"));
+        assert!(entry_looks_wanted("ui/battleclass/icon_bowslinger.png/0x4.igz"));
+        assert!(entry_looks_wanted("textures\\!ui!CreationCrystals!FireCrystal`tga.igz"));
         // Not menu pictures: a short word inside a longer one, sounds, a
         // screen whose archive isn't a menu's.
         assert!(!entry_looks_wanted("textures\\island_rock_d.igz"));
@@ -869,8 +929,8 @@ mod tests {
         folder
     }
 
-    fn meta(id: &str) -> Vec<u8> {
-        format!("<menu><title_id type=\"hexBinary\" length=\"8\">{id}</title_id><title_version type=\"unsignedInt\" length=\"4\">0</title_version><longname_en type=\"string\" length=\"512\">Skylanders\nSuperChargers</longname_en></menu>").into_bytes()
+    fn meta(id: &str, name: &str) -> Vec<u8> {
+        format!("<menu><title_id type=\"hexBinary\" length=\"8\">{id}</title_id><title_version type=\"unsignedInt\" length=\"4\">0</title_version><longname_en type=\"string\" length=\"512\">{name}</longname_en></menu>").into_bytes()
     }
 
     #[test]
@@ -893,7 +953,7 @@ mod tests {
         let folder = game_folder(
             "survey",
             &[
-                ("meta/meta.xml", &meta("00050000101BFC00")),
+                ("meta/meta.xml", &meta("00050000101BFC00", "Skylanders\nSuperChargers")),
                 ("content/misc/ui_garage.arc", &garage),
                 ("content/levels/level_01.arc", &level),
                 ("content/misc/newer.arc", b"IGA\x1a\x0c\x00\x00\x00 and a version not known here"),
@@ -935,6 +995,68 @@ mod tests {
         assert!(report.contains("entries whose names hold \"Stealth\":"), "{report}");
         assert!(report.contains("3221_0_stealthstinger.png: igz 8"), "{report}");
         assert!(!report.contains("3220_0_jetstream"), "{report}");
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn a_file_is_told_by_the_first_kinds_it_holds() {
+        use crate::igz::tests::{build_objects, object};
+        let kinds = ["igObjectList", "B", "C", "D", "E", "F", "G", "H"];
+        let objects: Vec<Vec<u8>> = (0..kinds.len() as u32).map(|kind| object(kind, &[])).collect();
+        let file = build_objects(&kinds, &[], &[], None, &objects, &[], None);
+        assert_eq!(held(&igz::Objects::read(&file).unwrap()), "holds igObjectList, B, C, D, E, F and 2 more kinds");
+        let file = build_objects(&kinds[..2], &[], &[], None, &objects[..2], &[], None);
+        assert_eq!(held(&igz::Objects::read(&file).unwrap()), "holds igObjectList, B");
+    }
+
+    #[test]
+    fn a_survey_tells_what_a_file_holds_and_reads_a_newer_one_as_version_9() {
+        use crate::igz::tests::{build_objects, build_picture};
+        let output = "Temporary/BuildServer/cafe/Output";
+        let picture = build_picture(16, &[0; 1024]);
+        let mut newer = picture.clone();
+        newer[4..8].copy_from_slice(&10u32.to_be_bytes());
+        let toy = crate::toys::tests::build_toy("CFullCharacterToyData", 601, "Example", &["Collection_Example_Normal"], &[]);
+        let material = build_objects(&["igObjectList"], &["GuiStandard", "graphics_effect", "Example_Icon", "image"], &[(0, 1), (2, 3)], None, &[], &[], None);
+        let data = crate::pak::tests::build_chunked(
+            0x0b,
+            &[
+                (&format!("{output}/ToyData/Example_ToyData.igz"), &toy),
+                (&format!("{output}/textures/!ui!Senseis!Example_Sensei`tga.igz"), &newer),
+                (&format!("{output}/textures/!ui!Crystals!Example_Crystal`tga.igz"), &picture),
+                (&format!("{output}/textures/!levels!rocks`tga.igz"), &picture),
+            ],
+        );
+        let collection = crate::pak::tests::build_chunked(0x0b, &[(&format!("{output}/materialInstances/ToyCollection/Collection_Example_Normal.igz"), &material)]);
+        let folder = game_folder(
+            "survey-holds",
+            &[
+                ("meta/meta.xml", &meta("00050000101FB100", "Skylanders Imaginators")),
+                ("content/archives/permanent.pak", &data),
+                ("content/archives/ToyCollectionMaterials.pak", &collection),
+            ],
+        );
+        let report = survey(&folder, None).unwrap();
+        for wanted in [
+            "title 00050000101fb100",
+            "    1 x igz 9, not a picture, holds CFullCharacterToyData, CVariantIdentifierList, such as Example_ToyData.igz",
+            "    1 x igz 9, not a picture, holds no objects, such as Collection_Example_Normal.igz",
+            "    !ui!Senseis!Example_Sensei`tga.igz: igz 10 read as igz 9, dxt5_tile_cafe, 16 x 16, ",
+            "    !ui!Crystals!Example_Crystal`tga.igz: igz 9, dxt5_tile_cafe, 16 x 16, ",
+            "the first igz 10, Temporary/BuildServer/cafe/Output/textures/!ui!Senseis!Example_Sensei`tga.igz in content/archives/permanent.pak, starts:",
+        ] {
+            assert!(report.contains(wanted), "{wanted:?} is missing from:\n{report}");
+        }
+        assert!(!report.contains("rocks"), "{report}");
+        // The outside names are printed only for a word, each entry on a line
+        // of its own.
+        assert!(!report.contains("naming"), "{report}");
+
+        let report = survey(&folder, Some("ToyData")).unwrap();
+        assert!(report.contains("    1 x igz 9, not a picture, holds CFullCharacterToyData, CVariantIdentifierList:\n      Example_ToyData.igz, naming Collection_Example_Normal (Collection_Example_Normal)\n"), "{report}");
+        let report = survey(&folder, Some("Collection")).unwrap();
+        assert!(report.contains("      Collection_Example_Normal.igz, naming GuiStandard (graphics_effect), Example_Icon (image)\n"), "{report}");
+        assert!(!report.contains("Example_ToyData"), "{report}");
         std::fs::remove_dir_all(folder).unwrap();
     }
 

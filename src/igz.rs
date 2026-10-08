@@ -119,7 +119,7 @@ pub fn read(bytes: &[u8]) -> Option<Picture> {
     let (object_section, size_in_object) = match version(bytes)? {
         SWAP_FORCE => SWAP_FORCE_OBJECT,
         TRAP_TEAM => TRAP_TEAM_OBJECT,
-        SUPERCHARGERS => return read_objects(bytes),
+        SUPERCHARGERS => return Objects::read(bytes)?.picture(),
         _ => return None,
     };
     let mut sections = Vec::new();
@@ -167,20 +167,6 @@ pub fn read(bytes: &[u8]) -> Option<Picture> {
     })
 }
 
-/// A picture of version 9, named by the archive as Trap Team's are.
-fn read_objects(bytes: &[u8]) -> Option<Picture> {
-    let objects = Objects::read(bytes)?;
-    let image = objects.of_kind(PICTURE).next()?;
-    let &(pixels, size) = objects.sections.last()?;
-    Some(Picture {
-        source: String::new(),
-        format: objects.format?,
-        width: usize::from(objects.half(image, IMAGE_SIZE)?),
-        height: usize::from(objects.half(image, IMAGE_SIZE + 2)?),
-        pixels: bytes.get(pixels..pixels + size)?.to_vec(),
-    })
-}
-
 /// A file of version 9 as the objects it holds.
 pub struct Objects<'a> {
     bytes: &'a [u8],
@@ -202,6 +188,14 @@ impl<'a> Objects<'a> {
         if version(bytes)? != SUPERCHARGERS {
             return None;
         }
+        Self::read_as_version_9(bytes)
+    }
+
+    /// A file read as version 9 lays one out, whatever version it says it
+    /// is. Only `survey` does this, to see whether a version not read here
+    /// still fits that layout, and says so wherever it does.
+    pub fn read_as_version_9(bytes: &'a [u8]) -> Option<Self> {
+        version(bytes)?;
         let mut sections = Vec::new();
         let mut at = SECTIONS;
         while be32(bytes, at)? != 0 {
@@ -245,6 +239,32 @@ impl<'a> Objects<'a> {
             objects.starts.push(start);
         }
         Some(objects)
+    }
+
+    /// The file's picture, when it holds one, named by the archive as Trap
+    /// Team's are.
+    pub fn picture(&self) -> Option<Picture> {
+        let image = self.of_kind(PICTURE).next()?;
+        let &(pixels, size) = self.sections.last()?;
+        Some(Picture {
+            source: String::new(),
+            format: self.format?,
+            width: usize::from(self.half(image, IMAGE_SIZE)?),
+            height: usize::from(self.half(image, IMAGE_SIZE + 2)?),
+            pixels: self.bytes.get(pixels..pixels + size)?.to_vec(),
+        })
+    }
+
+    /// The kinds of object the file holds, each once, in the order its
+    /// objects come.
+    pub fn kinds_held(&self) -> Vec<&str> {
+        let mut held = Vec::new();
+        for kind in self.starts.iter().filter_map(|&object| self.kind(object)) {
+            if !held.contains(&kind) {
+                held.push(kind);
+            }
+        }
+        held
     }
 
     /// Where a pointer leads in the file.
@@ -312,12 +332,17 @@ impl<'a> Objects<'a> {
         self.strings.get(string).map(String::as_str)
     }
 
+    /// Every outside name the file gives, with the namespace it is in.
+    pub fn outside_names(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
+        self.outside
+            .iter()
+            .filter_map(|&(name, space)| Some((self.strings.get(name)?.as_str(), self.strings.get(space)?.as_str())))
+    }
+
     /// The outside names in one namespace, such as a material's pictures,
     /// in `image`.
     pub fn outside_in<'b>(&'b self, namespace: &'b str) -> impl Iterator<Item = &'b str> + 'b {
-        self.outside.iter().filter_map(move |&(name, space)| {
-            (self.strings.get(space)? == namespace).then(|| self.strings.get(name).map(String::as_str))?
-        })
+        self.outside_names().filter(move |&(_, space)| space == namespace).map(|(name, _)| name)
     }
 }
 
@@ -595,7 +620,29 @@ pub(crate) mod tests {
         assert_eq!(objects.outside_name(items[1], 0x20), Some("Collection_DriverJetVac_Legendary"));
         assert_eq!(objects.outside_name(items[1], 0x08), None);
         assert_eq!(objects.outside_in("image").collect::<Vec<_>>(), ["Collection_DriverJetVac_Legendary"]);
+        assert_eq!(
+            objects.outside_names().collect::<Vec<_>>(),
+            [("Collection_DriverJetVac_Normal", "Collection_DriverJetVac_Normal"), ("Collection_DriverJetVac_Legendary", "image")]
+        );
         assert_eq!(objects.object(items[0], 0x1c), None);
+        // The filler between the second object and the far one is read as an
+        // object of kind 0 too, so it adds no kind of its own.
+        assert_eq!(objects.kinds_held(), ["igObjectList", "CFullCharacterToyData", "CVariantIdentifier"]);
+        assert!(objects.picture().is_none());
+    }
+
+    #[test]
+    fn a_newer_version_is_read_as_version_9_only_when_asked() {
+        let mut file = build_picture(88, &[7; 1024]);
+        file[4..8].copy_from_slice(&10u32.to_be_bytes());
+        assert!(read(&file).is_none());
+        assert!(Objects::read(&file).is_none());
+        let objects = Objects::read_as_version_9(&file).unwrap();
+        assert_eq!(objects.kinds_held(), ["igObjectList", PICTURE]);
+        let picture = objects.picture().unwrap();
+        assert_eq!((picture.format, picture.width, picture.height), (0x98cb_2a65, 88, 88));
+        assert!(Objects::read_as_version_9(b"IGZ\x01\x00\x00\x00\x0a and nothing laid out").is_none());
+        assert!(Objects::read_as_version_9(b"IGA\x1a not a file of this format").is_none());
     }
 
     /// A picture file laid out the way the game's are, with `pixels` for
