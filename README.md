@@ -1,7 +1,7 @@
 # omoio-portraits
 
 Reads the figure pictures out of your own copy of Skylanders Spyro's
-Adventure, Giants, SWAP Force, Trap Team or SuperChargers, so
+Adventure, Giants, SWAP Force, Trap Team, SuperChargers or Imaginators, so
 [Omoio](https://github.com/Bertrram/omoio)'s portal menu can show each figure
 as the game draws it. Omoio downloads this program only when you ask for the
 pictures, and checks it against a fingerprint before it runs.
@@ -46,8 +46,8 @@ field for, so each variant's picture is written with that bit and without
 it.
 
 Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team on the PS3
-and the Wii U, and SuperChargers on the Wii U are known so far. SWAP Force and
-Trap Team give the same pictures from either.
+and the Wii U, and SuperChargers and Imaginators on the Wii U are known so
+far. SWAP Force and Trap Team give the same pictures from either.
 
 `survey` is for working out a game that isn't known yet, and writes nothing.
 It prints the game's title id, its files by kind, each archive with its size,
@@ -61,23 +61,15 @@ outside things each file points to, such as a toy's materials.
 
 ### Skylanders Imaginators
 
-Imaginators on the Wii U is told by its title ids, but its pictures can't be
-read yet: `pictures` stops on it with a message and writes nothing. Once they
-can, they will be written under these names, so Omoio can look for them
-already:
-
-- each Sensei (ids 601 to 631, such as `601-5000.png`), Creation Crystal (680
-  to 689, such as `680-5208.png`) and older figure the game knows, as
-  `<id>-<variant>.png`, as for the other games;
-- the element symbols as `element-<name>.png`, and `element-kaos.png` if the
-  game has a Kaos symbol;
-- the game's badge for a Sensei as `class-sensei.png`, and for a villain
-  Sensei as `class-villain_sensei.png` if it has a badge of its own;
-- the symbol of each battle class, if the game has them, as white shapes for
-  Omoio to colour: `class-knight.png`, `class-bowslinger.png`,
-  `class-quickshot.png`, `class-ninja.png`, `class-brawler.png`,
-  `class-smasher.png`, `class-sorcerer.png`, `class-swashbuckler.png`,
-  `class-sentinel.png`, `class-bazooker.png` and `class-kaos.png`.
+From Imaginators, a .wua of the Wii U version, it writes every toy its
+Collection screen shows, as for SuperChargers: each Sensei (ids 601 to 631),
+Creation Crystal (680 to 689, with every casing) and older figure, as
+`<id>-<variant>.png`. It also writes its eleven element symbols, Kaos's
+included, as white shapes, `element-<name>.png`; the symbol of each battle
+class as a white shape, `class-knight.png`, `class-bowslinger.png` and so on,
+and `class-kaos.png`; and its badges for a Sensei and an Imaginator as the
+game draws them, `class-sensei.png` and `class-imaginator.png`. Its archives
+have SuperChargers' names, so the two are told apart by the title id.
 
 ## Build
 

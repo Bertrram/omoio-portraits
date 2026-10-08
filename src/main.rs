@@ -113,7 +113,7 @@ const SPYRO_ELEMENTS: [(&str, &str); 8] = [
 /// The size SWAP Force's portraits are, which Omoio shows them at.
 const PORTRAIT_SIDE: usize = 256;
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
-const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team, and SuperChargers on the Wii U.";
+const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team, and SuperChargers and Imaginators on the Wii U.";
 /// Skylanders Imaginators on the Wii U, by the last eight digits of its title
 /// ids: 00050000101F4D00 and 00050000101FB100, the USA's and Europe's in
 /// WiiUBrew's title database (read 7 October 2026), and 0005000010205E00,
