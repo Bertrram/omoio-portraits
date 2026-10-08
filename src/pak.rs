@@ -44,12 +44,23 @@
 //! archives of the game the same day: every packed file of all 270,576
 //! inflates to its size. Some, which hold no files, end before where their
 //! names would start.
+//!
+//! Skylanders Spyro's Adventure on the Wii (.arc and .bld) writes version 4,
+//! its header little-endian: the names' offset at 0x18, the checksums from
+//! 0x30, descriptors of 12 bytes as Giants' (offset, size and mode), and the
+//! three chunk tables after them, little-endian too, their lengths at 0x20,
+//! 0x24 and 0x28. Its header keeps no alignment (0x10 holds something
+//! else); every file and chunk starts on 0x800. A packed file's mode starts
+//! 0x10, and its chunks are LZMA as Giants' are, but each led by its length
+//! big-endian. Worked out from the game's files, 8 October 2026, and checked
+//! against every archive of its `misc` and `permanent` folders.
 
 use flate2::read::DeflateDecoder;
 use lzma_rust2::LzmaReader;
 use std::io::Read;
 
 const MAGIC: u32 = 0x1a41_4749;
+const SPYROS_ADVENTURE_WII: u32 = 0x04;
 const GIANTS: u32 = 0x08;
 const SWAP_FORCE: u32 = 0x0a;
 const TRAP_TEAM: u32 = 0x0b;
@@ -57,9 +68,17 @@ const SUPERCHARGERS: u32 = 0x0b;
 const CHUNK: usize = 0x8000;
 const DESCRIPTORS: usize = 0x38;
 const GIANTS_DESCRIPTORS: usize = 0x34;
+const WII_DESCRIPTORS: usize = 0x30;
+/// Where the lengths of the chunk tables are kept: version 4 has them one
+/// word on from the later versions.
+const TABLES: usize = 0x1c;
+const WII_TABLES: usize = 0x20;
+/// Version 4's alignment, which its header doesn't keep.
+const WII_ALIGN: usize = 0x800;
 const STORED: u32 = 0xff;
 const DEFLATED: [u32; 2] = [0x00, 0x10];
 const LZMA: u32 = 0x20;
+const WII_LZMA: u32 = 0x10;
 /// The part of a packed file's mode that says where its chunk numbers start.
 const BLOCK_INDEX: u32 = 0x0fff_ffff;
 /// The longest files, in sectors, the 8-bit and the 16-bit tables are for.
@@ -75,6 +94,9 @@ pub struct Pak<'a> {
     /// Where the 32-bit, 16-bit and 8-bit chunk tables start, in the
     /// versions that have them.
     tables: Option<[usize; 3]>,
+    /// Version 4's tables are little-endian and its chunks' lengths
+    /// big-endian, the other way round from the later versions.
+    wii: bool,
     pub files: Vec<PakFile>,
 }
 
@@ -84,6 +106,28 @@ pub struct PakFile {
     /// Its size once unpacked.
     pub size: usize,
     mode: u32,
+    packing: Packing,
+}
+
+/// How a file is kept, from the top byte of its mode, which version 4
+/// numbers its own way.
+#[derive(Clone, Copy, PartialEq)]
+enum Packing {
+    Stored,
+    Deflate,
+    Lzma,
+    Other(u32),
+}
+
+fn packing(version: u32, mode: u32) -> Packing {
+    match (version, mode >> 24) {
+        (_, STORED) => Packing::Stored,
+        (SPYROS_ADVENTURE_WII, WII_LZMA) => Packing::Lzma,
+        (SPYROS_ADVENTURE_WII, kind) => Packing::Other(kind),
+        (_, kind) if DEFLATED.contains(&kind) => Packing::Deflate,
+        (_, LZMA) => Packing::Lzma,
+        (_, kind) => Packing::Other(kind),
+    }
 }
 
 type Word = fn(&[u8], usize) -> Option<usize>;
@@ -94,6 +138,7 @@ type Word = fn(&[u8], usize) -> Option<usize>;
 /// and where its names start. In every version seen the names are at the
 /// end, after the files.
 pub struct Head {
+    version: u32,
     word: Word,
     descriptors: usize,
     descriptor: usize,
@@ -134,26 +179,32 @@ impl Head {
     /// Reads the head from the archive's first 0x40 bytes or more.
     pub fn read(bytes: &[u8]) -> Result<Head, String> {
         // Where the names' offset is kept, where the checksums start, the
-        // descriptors' layout, and whether chunk tables follow them, for
-        // each version.
-        let (word, names_at, checksums, descriptor, fields, chunked): (Word, usize, usize, usize, [usize; 3], bool) =
+        // descriptors' layout, and where the lengths of the chunk tables
+        // that follow them are kept, for each version.
+        let (word, names_at, checksums, descriptor, fields, chunked): (Word, usize, usize, usize, [usize; 3], Option<usize>) =
             match version(bytes) {
-                Some((SWAP_FORCE | SUPERCHARGERS, false)) => (be32, 0x2c, DESCRIPTORS, 16, [4, 8, 12], true),
-                Some((TRAP_TEAM, true)) => (le32, 0x28, DESCRIPTORS, 16, [0, 8, 12], false),
-                Some((GIANTS, true)) => (le32, 0x1c, GIANTS_DESCRIPTORS, 12, [0, 4, 8], false),
+                Some((SWAP_FORCE | SUPERCHARGERS, false)) => (be32, 0x2c, DESCRIPTORS, 16, [4, 8, 12], Some(TABLES)),
+                Some((TRAP_TEAM, true)) => (le32, 0x28, DESCRIPTORS, 16, [0, 8, 12], None),
+                Some((GIANTS, true)) => (le32, 0x1c, GIANTS_DESCRIPTORS, 12, [0, 4, 8], None),
+                Some((SPYROS_ADVENTURE_WII, true)) => (le32, 0x18, WII_DESCRIPTORS, 12, [0, 4, 8], Some(WII_TABLES)),
                 _ => return Err(not_known()),
             };
         let at = |offset: usize| word(bytes, offset).ok_or_else(not_known);
         let count = at(0x0c)?;
+        let version = version(bytes).map_or(0, |(version, _)| version);
         Ok(Head {
+            version,
             word,
             // Each file has a four-byte checksum before the descriptors start.
             descriptors: checksums + count * 4,
             descriptor,
             fields,
             count,
-            align: at(0x10)?.max(1),
-            tables: if chunked { Some([at(0x1c)?, at(0x20)?, at(0x24)?]) } else { None },
+            align: if version == SPYROS_ADVENTURE_WII { WII_ALIGN } else { at(0x10)?.max(1) },
+            tables: match chunked {
+                Some(lengths) => Some([at(lengths)?, at(lengths + 4)?, at(lengths + 8)?]),
+                None => None,
+            },
             names: at(names_at)?,
         })
     }
@@ -174,11 +225,13 @@ impl Head {
                 let at = self.descriptors + index * self.descriptor;
                 let name_at = word(names, index * 4)?;
                 let length = names.get(name_at..)?.iter().position(|&b| b == 0)?;
+                let mode = word(start, at + mode_at)? as u32;
                 Some(PakFile {
                     name: String::from_utf8_lossy(&names[name_at..name_at + length]).into_owned(),
                     offset: word(start, at + offset_at)?,
                     size: word(start, at + size_at)?,
-                    mode: word(start, at + mode_at)? as u32,
+                    mode,
+                    packing: packing(self.version, mode),
                 })
             })
             .collect::<Option<Vec<_>>>()
@@ -194,44 +247,41 @@ pub fn open(bytes: &[u8]) -> Result<Pak<'_>, String> {
         let start = head.length();
         [start, start + large * 4, start + large * 4 + medium * 2]
     });
-    Ok(Pak { bytes, align: head.align, tables, files })
+    Ok(Pak { bytes, align: head.align, tables, wii: head.version == SPYROS_ADVENTURE_WII, files })
 }
 
 impl PakFile {
     /// Where the file's bytes are in the archive and how many, when it is
     /// stored as it is, so it can be read without the rest.
     pub fn stored_at(&self) -> Option<(usize, usize)> {
-        (self.mode >> 24 == STORED).then_some((self.offset, self.size))
+        (self.packing == Packing::Stored).then_some((self.offset, self.size))
     }
 
     /// How the file is kept: as it is, deflated, packed with LZMA, or some
     /// other way, given by its number, which nothing here unpacks.
     pub fn packing(&self) -> String {
-        match self.mode >> 24 {
-            STORED => "stored".to_string(),
-            kind if DEFLATED.contains(&kind) => "deflate".to_string(),
-            LZMA => "lzma".to_string(),
-            kind => format!("packing 0x{kind:02x}"),
+        match self.packing {
+            Packing::Stored => "stored".to_string(),
+            Packing::Deflate => "deflate".to_string(),
+            Packing::Lzma => "lzma".to_string(),
+            Packing::Other(kind) => format!("packing 0x{kind:02x}"),
         }
     }
 }
 
 impl Pak<'_> {
     pub fn read(&self, file: &PakFile) -> Result<Vec<u8>, String> {
-        let kind = file.mode >> 24;
-        if kind == STORED {
-            return self
-                .bytes
-                .get(file.offset..file.offset + file.size)
-                .map(<[u8]>::to_vec)
-                .ok_or_else(not_known);
-        }
-        let unpack = if DEFLATED.contains(&kind) {
-            inflate
-        } else if kind == LZMA {
-            unlzma
-        } else {
-            return Err(not_known());
+        let unpack = match file.packing {
+            Packing::Stored => {
+                return self
+                    .bytes
+                    .get(file.offset..file.offset + file.size)
+                    .map(<[u8]>::to_vec)
+                    .ok_or_else(not_known);
+            }
+            Packing::Deflate => inflate,
+            Packing::Lzma => unlzma,
+            Packing::Other(_) => return Err(not_known()),
         };
         match self.tables {
             Some(tables) => self.read_by_tables(file, tables, unpack),
@@ -243,17 +293,22 @@ impl Pak<'_> {
     /// and whether it is packed.
     fn read_by_tables(&self, file: &PakFile, [large, medium, small]: [usize; 3], unpack: Unpack) -> Result<Vec<u8>, String> {
         let first = (file.mode & BLOCK_INDEX) as usize;
+        // Version 4 keeps its tables little-endian and its chunks' lengths
+        // big-endian, the later versions the other way round.
+        let half = |at: usize, little: bool| {
+            let b = self.bytes.get(at..at + 2)?;
+            Some(if little { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) })
+        };
         let start = |chunk: usize| -> Option<(bool, usize)> {
             let at = first + chunk;
             if file.size <= SMALL_SECTORS * self.align {
                 let number = *self.bytes.get(small + at)?;
                 Some((number & 0x80 != 0, usize::from(number & 0x7f)))
             } else if file.size <= MEDIUM_SECTORS * self.align {
-                let number = self.bytes.get(medium + at * 2..medium + at * 2 + 2)?;
-                let number = u16::from_be_bytes([number[0], number[1]]);
+                let number = half(medium + at * 2, self.wii)?;
                 Some((number & 0x8000 != 0, usize::from(number & 0x7fff)))
             } else {
-                let number = be32(self.bytes, large + at * 4)?;
+                let number = if self.wii { le32(self.bytes, large + at * 4)? } else { be32(self.bytes, large + at * 4)? };
                 Some((number & 0x8000_0000 != 0, number & 0x7fff_ffff))
             }
         };
@@ -263,7 +318,7 @@ impl Pak<'_> {
             let at = file.offset + sector * self.align;
             let size = (file.size - out.len()).min(CHUNK);
             let bytes = if packed {
-                let length = self.bytes.get(at..at + 2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])));
+                let length = half(at, !self.wii).map(usize::from);
                 length.and_then(|length| unpack(self.bytes.get(at + 2..)?, length, size)).map(|(bytes, _)| bytes)
             } else {
                 self.bytes.get(at..at + size).map(<[u8]>::to_vec)
@@ -546,6 +601,108 @@ pub(crate) mod tests {
             out[at + 8..at + 12].copy_from_slice(&mode.to_le_bytes());
         }
         out
+    }
+
+    /// An archive laid out as Spyro's Adventure's on the Wii: version 4,
+    /// little-endian, each of `packed` packed in LZMA chunks, those that
+    /// don't shrink left whole, the chunk tables saying which, and `whole`
+    /// stored as it is last. A file of more than 0x7F sectors goes in the
+    /// 16-bit table.
+    pub(crate) fn build_wii(packed: &[(&str, &[u8])], whole: (&str, &[u8])) -> Vec<u8> {
+        let align = WII_ALIGN;
+        let mut options = LzmaOptions::with_preset(6);
+        options.dict_size = CHUNK as u32;
+        let mut body = Vec::new();
+        let mut placed = Vec::new();
+        for (_, data) in packed {
+            let start = body.len();
+            let mut numbers = Vec::new();
+            for chunk in data.chunks(CHUNK) {
+                let mut writer = LzmaWriter::new_no_header(Vec::new(), &options, false).unwrap();
+                writer.write_all(chunk).unwrap();
+                let stream = writer.finish().unwrap();
+                let sector = (body.len() - start) / align;
+                if stream.len() + 7 < chunk.len() {
+                    numbers.push((true, sector));
+                    body.extend_from_slice(&(stream.len() as u16).to_be_bytes());
+                    body.extend_from_slice(&LZMA_SETTINGS);
+                    body.extend_from_slice(&stream);
+                } else {
+                    numbers.push((false, sector));
+                    body.extend_from_slice(chunk);
+                }
+                body.resize(body.len().div_ceil(align) * align, 0);
+            }
+            numbers.push((false, (body.len() - start) / align));
+            placed.push((start, numbers));
+        }
+        let (mut medium, mut small, mut modes) = (Vec::new(), Vec::new(), Vec::new());
+        for ((_, data), (_, numbers)) in packed.iter().zip(&placed) {
+            if data.len() <= SMALL_SECTORS * align {
+                modes.push(0x1000_0000 | small.len() as u32);
+                small.extend(numbers.iter().map(|&(on, sector)| sector as u8 | u8::from(on) << 7));
+            } else {
+                modes.push(0x1000_0000 | medium.len() as u32);
+                medium.extend(numbers.iter().map(|&(on, sector)| sector as u16 | u16::from(on) << 15));
+            }
+        }
+        let count = packed.len() + 1;
+        let tables = WII_DESCRIPTORS + count * 16;
+        let first = (tables + medium.len() * 2 + small.len()).div_ceil(align) * align;
+        let mut out = vec![0; first];
+        let word = |out: &mut Vec<u8>, at: usize, value: usize| out[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+        word(&mut out, 0, MAGIC as usize);
+        word(&mut out, 4, SPYROS_ADVENTURE_WII as usize);
+        word(&mut out, 0x0c, count);
+        // Not the alignment, which version 4 doesn't keep.
+        word(&mut out, 0x10, 0x2449_9224);
+        word(&mut out, 0x24, medium.len());
+        word(&mut out, 0x28, small.len());
+        for (index, ((_, data), (start, _))) in packed.iter().zip(&placed).enumerate() {
+            let at = WII_DESCRIPTORS + count * 4 + index * 12;
+            word(&mut out, at, first + start);
+            word(&mut out, at + 4, data.len());
+            word(&mut out, at + 8, modes[index] as usize);
+        }
+        for (k, number) in medium.iter().enumerate() {
+            out[tables + k * 2..tables + k * 2 + 2].copy_from_slice(&number.to_le_bytes());
+        }
+        out[tables + medium.len() * 2..tables + medium.len() * 2 + small.len()].copy_from_slice(&small);
+        out.extend_from_slice(&body);
+        let (at, offset) = (WII_DESCRIPTORS + count * 4 + packed.len() * 12, out.len());
+        word(&mut out, at, offset);
+        word(&mut out, at + 4, whole.1.len());
+        word(&mut out, at + 8, u32::MAX as usize);
+        out.extend_from_slice(whole.1);
+        out.resize(out.len().div_ceil(align) * align, 0);
+        let names = out.len();
+        word(&mut out, 0x18, names);
+        let mut text = Vec::new();
+        for (name, _) in packed.iter().chain([&whole]) {
+            out.extend_from_slice(&((count * 4 + text.len()) as u32).to_le_bytes());
+            text.extend_from_slice(name.as_bytes());
+            text.push(0);
+        }
+        out.extend_from_slice(&text);
+        out
+    }
+
+    #[test]
+    fn a_wii_archive_unpacks_its_lzma_chunks() {
+        // The long file's second chunk doesn't shrink, so it is left whole.
+        let mut long: Vec<u8> = (0..CHUNK).map(|i| (i % 97) as u8).collect();
+        long.extend(noise(CHUNK));
+        long.extend((0..SMALL_SECTORS * WII_ALIGN).map(|i| (i % 13) as u8));
+        let short: Vec<u8> = (0..3000).map(|i| (i % 7) as u8).collect();
+        let bytes = build_wii(&[("FRENCH.pak", &short), ("level.bld", &long)], ("x.igz", b"IGZ\x01 stored whole"));
+        assert_eq!(version(&bytes), Some((SPYROS_ADVENTURE_WII, true)));
+        let pak = open(&bytes).unwrap();
+        let names: Vec<_> = pak.files.iter().map(|file| (file.name.as_str(), file.packing())).collect();
+        assert_eq!(names, [("FRENCH.pak", "lzma".to_string()), ("level.bld", "lzma".to_string()), ("x.igz", "stored".to_string())]);
+        assert_eq!(pak.read(&pak.files[0]).unwrap(), short);
+        assert_eq!(pak.read(&pak.files[1]).unwrap(), long);
+        assert_eq!(pak.read(&pak.files[2]).unwrap(), b"IGZ\x01 stored whole");
+        assert!(pak.files[1].stored_at().is_none());
     }
 
     #[test]
