@@ -472,6 +472,44 @@ pub fn spyros_adventure_wii(path: &str) -> Option<u16> {
     SPYROS_ADVENTURE_WII.iter().find(|(name, _)| *name == code).map(|&(_, id)| id)
 }
 
+/// Spyro's Adventure's magic items and adventure packs, which it shows on
+/// screen as small pictures of the toys, its magic items' sprites
+/// (`levels/includes/ui_magicitems/sprites/<name>.png`, 64 x 64): the
+/// sprite's name, the archive the Wii version keeps it in, the toy's own
+/// (`item/<archive>.bld`), and the toy's id. The game's own names are not
+/// the toys' ("potion" is Healing Elixir, its archive "Regeneration", and
+/// Winged Boots' archive is "Potion"), so the table was checked by eye: an
+/// adventure pack's archive also holds the sprite of the magic item that
+/// came with it, which matches.
+pub const SPYROS_ADVENTURE_TOYS: &[(&str, &str, u16)] = &[
+    ("anvil", "Item_Anvil", 200),                   // Anvil Rain
+    ("secret_stash", "Item_SecretStash", 201),      // Hidden Treasure
+    ("potion", "Item_Regeneration", 202),           // Healing Elixir
+    ("crossed_swords", "Item_Pirates", 203),        // Ghost Pirate Swords
+    ("hourglass", "Item_Hourglass", 204),           // Time Twist Hourglass
+    ("shield", "Item_Shield", 205),                 // Sky-Iron Shield
+    ("speed_boots", "Item_Potion", 206),            // Winged Boots
+    ("sparx", "Item_Zapper", 207),                  // Sparx the Dragonfly
+    ("exp_dragon", "Item_Location_Dragon", 300),    // Dragon's Peak
+    ("exp_ice", "Item_Location_Ice", 301),          // Empire of Ice
+    ("exp_pirate", "Item_Location_Pirate", 302),    // Pirate Seas
+    ("exp_undead", "Item_Location_Undead", 303),    // Darklight Crypt
+];
+
+/// The PS3 version keeps only four of those sprites, the magic items that
+/// came with the adventure packs, with its menus' pictures. Its picture
+/// named "anvil" there is a hat's, so the others are not looked for by name.
+const SPYROS_ADVENTURE_PS3_TOYS: [&str; 4] = ["potion", "crossed_swords", "shield", "speed_boots"];
+
+/// The toy one of the PS3 version's menu pictures shows, by the picture's
+/// name.
+pub fn spyros_adventure_toy(source: &str) -> Option<u16> {
+    if !SPYROS_ADVENTURE_PS3_TOYS.contains(&source) {
+        return None;
+    }
+    SPYROS_ADVENTURE_TOYS.iter().find(|(sprite, _, _)| *sprite == source).map(|&(_, _, id)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +582,20 @@ mod tests {
             ids
         };
         assert_eq!(ids(SPYROS_ADVENTURE_WII), ids(SPYROS_ADVENTURE));
+    }
+
+    #[test]
+    fn spyros_adventure_toys_are_told_by_their_sprites() {
+        assert_eq!(spyros_adventure_toy("potion"), Some(202));
+        assert_eq!(spyros_adventure_toy("speed_boots"), Some(206));
+        // The PS3's "anvil" is a hat, and it has no sprite of the others.
+        assert_eq!(spyros_adventure_toy("anvil"), None);
+        assert_eq!(spyros_adventure_toy("exp_dragon"), None);
+        assert_eq!(spyros_adventure_toy("shield_mark"), None);
+        // Every magic item and adventure pack of the first game, once each.
+        let mut ids: Vec<u16> = SPYROS_ADVENTURE_TOYS.iter().map(|&(_, _, id)| id).collect();
+        ids.sort();
+        assert_eq!(ids, [200, 201, 202, 203, 204, 205, 206, 207, 300, 301, 302, 303]);
     }
 
     #[test]

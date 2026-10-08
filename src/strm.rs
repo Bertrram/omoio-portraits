@@ -100,10 +100,10 @@ pub fn blocks(pixels: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn package(name: &str, width: u16, pixels: &[u8]) -> Vec<u8> {
+    pub(crate) fn package(name: &str, width: u16, pixels: &[u8]) -> Vec<u8> {
         let mut package = vec![0; PIXELS_AT];
         package[..4].copy_from_slice(PACKAGE);
         package[NAME_AT..NAME_AT + 4].copy_from_slice(&0x4cu32.to_be_bytes());
@@ -119,7 +119,7 @@ mod tests {
         package
     }
 
-    fn stream(packages: &[Vec<u8>]) -> Vec<u8> {
+    pub(crate) fn stream(packages: &[Vec<u8>]) -> Vec<u8> {
         let mut unpacked = RECORD.to_be_bytes().to_vec();
         unpacked.extend_from_slice(&(packages.len() as u32).to_be_bytes());
         for package in packages {

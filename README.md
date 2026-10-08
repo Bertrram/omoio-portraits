@@ -30,9 +30,10 @@ the Swap Zone badge of each way a swapper moves as `movement-<name>.png`.
 From Trap Team it writes every trap the same way as the figures, and each
 villain as the Villain Vault shows it, in a trap (`villain-<number>.png`) and
 out of one (`villain-<number>-loose.png`). From Spyro's Adventure it writes
-each Skylander whole, as its versus screen shows them, and the element
-symbols. It prints `progress <done> <of>` as it goes and `done <written>` at
-the end.
+each Skylander whole, as its versus screen shows them, the element symbols,
+and the magic items it has pictures of, as it shows them on screen: on the
+PS3 the four that came with the adventure packs. It prints
+`progress <done> <of>` as it goes and `done <written>` at the end.
 
 From SuperChargers it writes every toy its Collection screen shows, as the
 game's own toy data names them: each vehicle (ids 3220 to 3241), SuperCharger
@@ -78,12 +79,15 @@ have SuperChargers' names, so the two are told apart by the title id.
 A Wii disc is encrypted, so the Wii version is read from a copy of the
 game's files that Dolphin's own tool makes, `DolphinTool extract -g`: the
 `DATA` folder it writes, or the folder above it. Of the game's files only
-two are read, `files/misc/PvP_MainControl.arc` and
-`files/permanent/global.bld`, so a copy of just those does as well. It
-writes the same pictures as the PS3 version: each Skylander whole, as its
-versus screen shows them, set in a square and shrunk to 256 pixels, and the
-eight element symbols as white shapes, each cut to the square around its
-shape.
+`files/misc/PvP_MainControl.arc`, `files/permanent/global.bld` and the
+magic items' archives in `files/item` are read, so a copy of just those
+does as well. It writes the same pictures as the PS3 version: each
+Skylander whole, as its versus screen shows them, set in a square and
+shrunk to 256 pixels, and the eight element symbols as white shapes, each
+cut to the square around its shape. It also writes every magic item (ids
+200 to 207) and adventure pack (300 to 303) as the game shows them on
+screen, each cut to the square around its shape. The game has no bigger
+picture of them than these, 64 pixels square.
 
 ## Build
 

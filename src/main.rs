@@ -21,7 +21,8 @@
 //! SWAP Force and Trap Team give the same pictures from a .wua of the Wii U
 //! version as from a folder of the PS3 one. From Spyro's Adventure, a PS3
 //! game folder, it writes each Skylander as its versus screen shows them,
-//! whole, and its element symbols. From SuperChargers, a .wua of the Wii U
+//! whole, its element symbols, and the four magic items it has pictures of,
+//! as it shows them on screen. From SuperChargers, a .wua of the Wii U
 //! version, it writes every toy and variant its Collection screen shows,
 //! vehicles and trophies among them, its ten element symbols, its badge for
 //! a SuperCharger, `class-supercharger.png`, and its Land, Sea and Sky
@@ -36,7 +37,8 @@
 //! From Spyro's Adventure on the Wii, a copy of the game's files as Dolphin's
 //! own tool writes it (the folder `DATA`, which holds `files`), it writes
 //! each Skylander whole as its versus screen shows them, and its element
-//! symbols, as from the PS3 version.
+//! symbols, as from the PS3 version, and every magic item and adventure pack
+//! as it shows them on screen.
 //! Nothing is downloaded: every picture comes from the user's own files.
 //!
 //! A third way is for working out a game that isn't known yet:
@@ -100,9 +102,11 @@ const ELEMENTS: [&str; 8] = ["air", "earth", "fire", "life", "magic", "tech", "u
 const GLOW: u32 = 64;
 const GLASS: u32 = 176;
 /// Spyro's Adventure keeps its menus' pictures in one file (see `strm`):
-/// each Skylander whole, 512 pixels square, for its versus screen, and the
-/// element symbols, `elementicon<element>`, whose shapes are their alpha.
-/// The game says death for Undead and mech for Tech.
+/// each Skylander whole, 512 pixels square, for its versus screen, the
+/// element symbols, `elementicon<element>`, whose shapes are their alpha,
+/// and the sprites of four of its magic items (see
+/// `names::spyros_adventure_toy`), 64 pixels square. The game says death
+/// for Undead and mech for Tech.
 const SPYROS_ADVENTURE: &str = "PS3_GAME/USRDIR/uigameimage.str";
 const SPYRO_SYMBOL: &str = "elementicon";
 const SPYRO_ELEMENTS: [(&str, &str); 8] = [
@@ -131,6 +135,14 @@ const WII_ROOTS: [&str; 3] = ["files/", "DATA/files/", "P0/files/"];
 const SPYROS_ADVENTURE_WII: &str = "misc/PvP_MainControl.arc";
 const WII_SYMBOLS: &str = "permanent/global.bld";
 const WII_SYMBOL: &str = "_128";
+/// Each magic item and adventure pack has an archive of its own,
+/// `item/Item_<name>.bld`, with the toy's model and effects, whose screen
+/// holds the sprite the game shows it with, 64 pixels square, with its
+/// alpha (see `names::SPYROS_ADVENTURE_TOYS`). The game has no bigger
+/// picture of them: its Collection screens have Skylanders, treasures, hats
+/// and story scrolls but no toys, and the toys' other pictures are their
+/// models' textures. Seen in the game's files, 8 October 2026.
+const WII_TOYS: &str = "item/";
 /// CMPR, the Wii's DXT1, as the game names it: the FNV-1a hash of
 /// "dxt1_tile_big_wii". Every picture read from the Wii is in it.
 const CMPR: u32 = 0x79dd_819e;
@@ -576,13 +588,14 @@ fn spyros_adventure(bytes: &[u8], folder: &Path) -> Result<usize, String> {
             continue;
         }
         let figure = names::spyros_adventure(&picture.name);
+        let toy = names::spyros_adventure_toy(&picture.name);
         let element = picture
             .name
             .strip_prefix(SPYRO_SYMBOL)
             .and_then(|own| SPYRO_ELEMENTS.iter().find(|(game, _)| *game == own))
             .map(|&(_, omoio)| omoio)
             .filter(|element| !symbols_done.contains(element));
-        if figure.is_none() && element.is_none() {
+        if figure.is_none() && toy.is_none() && element.is_none() {
             continue;
         }
         symbols_done.extend(element);
@@ -592,15 +605,13 @@ fn spyros_adventure(bytes: &[u8], folder: &Path) -> Result<usize, String> {
         if let Some(id) = figure {
             let small = shrink(&rgba, width, height, PORTRAIT_SIDE);
             write(&folder.join(format!("{id}-0000.png")), PORTRAIT_SIDE, PORTRAIT_SIDE, &small)?;
+        } else if let Some(id) = toy {
+            without_mark(&mut rgba, width, height);
+            let (square, side) = around_shape(&rgba, width, height);
+            write(&folder.join(format!("{id}-0000.png")), side, side, &square)?;
         } else if let Some(element) = element {
             make_white(&mut rgba);
-            // Every symbol has a mark of ten pixels in its last 4 x 4 corner,
-            // well apart from the shape, which would show as a speck.
-            for y in height - 4..height {
-                for x in width - 4..width {
-                    rgba[(y * width + x) * 4 + 3] = 0;
-                }
-            }
+            without_mark(&mut rgba, width, height);
             write(&folder.join(format!("element-{element}.png")), width, height, &rgba)?;
         }
         written += 1;
@@ -609,15 +620,27 @@ fn spyros_adventure(bytes: &[u8], folder: &Path) -> Result<usize, String> {
     Ok(written)
 }
 
+/// Spyro's Adventure on the PS3 marks its small pictures, the element
+/// symbols and the toys' sprites, with ten pixels in their last 4 x 4
+/// corner, well apart from the shape, which would show as a speck. The
+/// mark is cleared.
+fn without_mark(rgba: &mut [u8], width: usize, height: usize) {
+    for y in height.saturating_sub(4)..height {
+        for x in width.saturating_sub(4)..width {
+            rgba[(y * width + x) * 4 + 3] = 0;
+        }
+    }
+}
+
 /// Spyro's Adventure on the Wii: each Skylander as its versus screen shows
 /// them, set in a square and shrunk to the size the PS3 version's are
-/// written at, and the element symbols.
+/// written at, the element symbols, and the magic items and adventure packs.
 fn spyros_adventure_wii(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String> {
     let archive = pak::open(bytes)?;
     let versus: Vec<_> = archive.files.iter().filter_map(|file| names::spyros_adventure_wii(&file.name).map(|id| (file, id))).collect();
     std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
-    // The element symbols come last, a step.
-    let steps = versus.len() + 1;
+    // The element symbols and the toys come last, a step each.
+    let steps = versus.len() + 2;
     let mut written = 0;
     for (done, (file, id)) in versus.iter().enumerate() {
         println!("progress {done} {steps}");
@@ -632,7 +655,40 @@ fn spyros_adventure_wii(game: &Path, bytes: &[u8], folder: &Path) -> Result<usiz
     }
     println!("progress {} {steps}", versus.len());
     written += wii_symbols(game, folder)?;
+    println!("progress {} {steps}", versus.len() + 1);
+    written += wii_toys(game, folder)?;
     println!("progress {steps} {steps}");
+    Ok(written)
+}
+
+/// Spyro's Adventure's magic items and adventure packs on the Wii, each the
+/// sprite the game shows it with, read from the toy's own archive (see
+/// `names::SPYROS_ADVENTURE_TOYS`) and cut to the square around its shape,
+/// so it fills its place as a Skylander does: `<id>-0000.png`. Sky-Iron
+/// Shield's archive also has a texture of its model named "shield", without
+/// an alpha, so the sprite is the picture of that name with one. A copy
+/// without a toy's archive, or with one that doesn't read, just has no
+/// picture of it.
+fn wii_toys(game: &Path, folder: &Path) -> Result<usize, String> {
+    let mut written = 0;
+    for &(sprite, archive, id) in names::SPYROS_ADVENTURE_TOYS {
+        let Some(bytes) = wii_file(game, &format!("{WII_TOYS}{archive}.bld")) else {
+            continue;
+        };
+        let Ok(pictures) = screen_pictures(&bytes) else {
+            continue;
+        };
+        let found = pictures
+            .iter()
+            .filter(|picture| picture.source == sprite && picture.alpha.is_some())
+            .find_map(|picture| Some((picture, wii_upright(picture)?)));
+        let Some((picture, rgba)) = found else {
+            continue;
+        };
+        let (square, side) = around_shape(&rgba, picture.width, picture.height);
+        write(&folder.join(format!("{id}-0000.png")), side, side, &square)?;
+        written += 1;
+    }
     Ok(written)
 }
 
@@ -1282,21 +1338,30 @@ mod tests {
             ("levels/includes/ui_main/sprites/elementalicons/fire_128.png_ALPHACHANNEL", 0, 8, 8, &corner),
             ("levels/includes/ui_main/sprites/elementalicons/life_64.png", 1, 8, 8, &white),
         ]);
+        // Sky-Iron Shield's sprite, 16 x 8 with its right half clear, after
+        // a texture of its model with the same name and no alpha.
+        let (blue, black) = (tile(0x001f), tile(0x0000));
+        let toy = build_wii(&[
+            ("models/objects/powerups_items/item_shield/shield.png", 1, 8, 8, &red),
+            ("levels/includes/ui_magicitems/sprites/shield.png", 1, 16, 8, &[blue.clone(), blue].concat()),
+            ("levels/includes/ui_magicitems/sprites/shield.png_ALPHACHANNEL", 0, 16, 8, &[white.clone(), black].concat()),
+        ]);
         let models = "C:/tfb/build/wii/Models/characters/MinionsMonsters";
         let pvp = pak::tests::build_wii(&[], (&format!("{models}/SpyroJr/Sprite/SpyroLeft_VS.png/0xf848aa48.png.igb.tex.igz"), &versus));
         let global = pak::tests::build_wii(&[("FRENCH.pak", b"words"), ("level.bld", &screen)], ("ENGLISH.pak", b"words"));
+        let shield = pak::tests::build_wii(&[("level.bld", &toy)], ("ENGLISH.pak", b"words"));
         let game = std::env::temp_dir().join(format!("omoio-portraits-{}-wii", std::process::id()));
         let files = game.join("DATA").join("files");
-        for (inside, name, bytes) in [("misc", "PvP_MainControl.arc", &pvp), ("permanent", "global.bld", &global)] {
+        for (inside, name, bytes) in [("misc", "PvP_MainControl.arc", &pvp), ("permanent", "global.bld", &global), ("item", "Item_Shield.bld", &shield)] {
             std::fs::create_dir_all(files.join(inside)).unwrap();
             std::fs::write(files.join(inside).join(name), bytes).unwrap();
         }
         // Omoio gives the folder Dolphin's own tool wrote, DATA.
         let folder = game.join("pictures");
-        assert_eq!(pictures(&game.join("DATA"), &folder), Ok(2));
+        assert_eq!(pictures(&game.join("DATA"), &folder), Ok(3));
         let mut written: Vec<String> = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
         written.sort();
-        assert_eq!(written, ["16-0000.png", "element-fire.png"]);
+        assert_eq!(written, ["16-0000.png", "205-0000.png", "element-fire.png"]);
         let read = |name: &str| {
             let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(folder.join(name)).unwrap()));
             let mut reader = decoder.read_info().unwrap();
@@ -1314,9 +1379,48 @@ mod tests {
         let alpha = |x: usize, y: usize| fire[(y * 8 + x) * 4 + 3];
         assert_eq!((alpha(0, 0), alpha(0, 7), alpha(1, 7)), (255, 0, 255));
         assert_eq!(&fire[..3], [255, 255, 255]);
+        // The shield is its sprite cut to its shape, the half that shows.
+        let (width, height, shield) = read("205-0000.png");
+        assert_eq!((width, height), (8, 8));
+        assert!(shield.chunks_exact(4).all(|pixel| pixel == [0, 0, 255, 255]));
         // The folder above DATA does as well.
         std::fs::remove_dir_all(&folder).unwrap();
-        assert_eq!(pictures(&game, &folder), Ok(2));
+        assert_eq!(pictures(&game, &folder), Ok(3));
+        std::fs::remove_dir_all(game).unwrap();
+    }
+
+    #[test]
+    fn spyros_adventure_on_the_ps3_gives_four_magic_items() {
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+        // DXT5 blocks as the game keeps them, colour before alpha: red, and
+        // solid or clear.
+        let block = |alpha: u8| [vec![0x00, 0xf8, 0, 0, 0, 0, 0, 0], vec![alpha, alpha, 0, 0, 0, 0, 0, 0]].concat();
+        // Healing Elixir's sprite: its top left block shows, the bottom
+        // right one is the game's mark, the rest is clear.
+        let potion = [block(255), block(0), block(0), block(255)].concat();
+        let unpacked = strm::tests::stream(&[
+            strm::tests::package("potion", 8, &potion),
+            // A hat's picture, named like Anvil Rain's sprite on the Wii.
+            strm::tests::package("anvil", 8, &potion),
+        ]);
+        let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&unpacked).unwrap();
+        let file = [b"strm".to_vec(), vec![0; 16], encoder.finish().unwrap()].concat();
+        let game = std::env::temp_dir().join(format!("omoio-portraits-{}-spyro-ps3", std::process::id()));
+        std::fs::create_dir_all(game.join("PS3_GAME/USRDIR")).unwrap();
+        std::fs::write(game.join("PS3_GAME/USRDIR/uigameimage.str"), file).unwrap();
+        let folder = game.join("pictures");
+        assert_eq!(pictures(&game, &folder), Ok(1));
+        let written: Vec<String> = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(written, ["202-0000.png"]);
+        // Without its mark it is cut to the block that shows.
+        let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(folder.join("202-0000.png")).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!((info.width, info.height), (4, 4));
+        assert!(pixels.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 255]));
         std::fs::remove_dir_all(game).unwrap();
     }
 
