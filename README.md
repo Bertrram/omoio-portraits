@@ -52,9 +52,32 @@ Trap Team give the same pictures from either.
 `survey` is for working out a game that isn't known yet, and writes nothing.
 It prints the game's title id, its files by kind, each archive with its size,
 its format version and whether it opens here, and the pictures inside that
-look like a menu's, with their size and pixel format. Long lists are cut
-short. Given a word, it prints only the entries whose names hold that word,
-all of them.
+look like a menu's, with their size and pixel format. A file in the game's
+own format that isn't a picture is told by the kinds of object it holds, and
+one of a format version not read here is tried as the newest that is, which
+the survey says. Long lists are cut short. Given a word, it prints only the
+entries whose names hold that word, all of them, with the names of the
+outside things each file points to, such as a toy's materials.
+
+### Skylanders Imaginators
+
+Imaginators on the Wii U is told by its title ids, but its pictures can't be
+read yet: `pictures` stops on it with a message and writes nothing. Once they
+can, they will be written under these names, so Omoio can look for them
+already:
+
+- each Sensei (ids 601 to 631, such as `601-5000.png`), Creation Crystal (680
+  to 689, such as `680-5208.png`) and older figure the game knows, as
+  `<id>-<variant>.png`, as for the other games;
+- the element symbols as `element-<name>.png`, and `element-kaos.png` if the
+  game has a Kaos symbol;
+- the game's badge for a Sensei as `class-sensei.png`, and for a villain
+  Sensei as `class-villain_sensei.png` if it has a badge of its own;
+- the symbol of each battle class, if the game has them, as white shapes for
+  Omoio to colour: `class-knight.png`, `class-bowslinger.png`,
+  `class-quickshot.png`, `class-ninja.png`, `class-brawler.png`,
+  `class-smasher.png`, `class-sorcerer.png`, `class-swashbuckler.png`,
+  `class-sentinel.png`, `class-bazooker.png` and `class-kaos.png`.
 
 ## Build
 

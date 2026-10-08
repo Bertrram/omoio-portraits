@@ -28,6 +28,9 @@
 //! symbols as white shapes, `terrain-<name>.png`. It
 //! prints `progress <done> <of>` as it goes and `done <written>` at the end.
 //! Nothing is downloaded: every picture comes from the user's own files.
+//! Skylanders Imaginators on the Wii U is told by its title ids, but its
+//! pictures aren't known yet, so `pictures` stops on it with a message, as
+//! for any game it doesn't know, and writes nothing.
 //!
 //! A third way is for working out a game that isn't known yet:
 //!
@@ -108,6 +111,15 @@ const SPYRO_ELEMENTS: [(&str, &str); 8] = [
 const PORTRAIT_SIDE: usize = 256;
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
 const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team, and SuperChargers on the Wii U.";
+/// Skylanders Imaginators on the Wii U, by the last eight digits of its title
+/// ids: 00050000101F4D00 and 00050000101FB100, the USA's and Europe's in
+/// WiiUBrew's title database (read 7 October 2026), and 0005000010205E00,
+/// which Cemu's graphic packs list beside them in the pack that also patches
+/// a demo (read 8 October 2026). Its update and DLC share the last eight
+/// digits. Its files haven't been seen yet, so `pictures` stops on it rather
+/// than read it as one of the other games.
+const IMAGINATORS: [&str; 3] = ["101f4d00", "101fb100", "10205e00"];
+const IMAGINATORS_NOT_YET: &str = "Omoio can't read the figure pictures of Skylanders Imaginators yet.";
 /// SuperChargers keeps its toy data in `permanent.pak` (see `toys`) and the
 /// pictures its Collection screen draws each toy with in
 /// `ToyCollectionMaterials.pak`: a material for each,
@@ -255,6 +267,12 @@ fn meta_value(meta: &str, key: &str) -> Option<String> {
     Some(value.trim().to_string())
 }
 
+/// Whether a title id, as `title` gives it, is one of Skylanders Imaginators
+/// on the Wii U: the game's, its demo's, its update's or its DLC's.
+fn is_imaginators(id: &str) -> bool {
+    id.len() == 16 && IMAGINATORS.iter().any(|end| id.ends_with(end))
+}
+
 /// A text value of a PS3 game's PARAM.SFO. After the magic and a version
 /// come where the keys and the values start and how many there are, then
 /// 16 bytes for each: the key's offset, its format, the value's length, the
@@ -284,8 +302,12 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 
 /// Tells the game by its files rather than its title id, so every region's
 /// copy of it is read the same way: SuperChargers' two title ids,
-/// 00050000101BFC00 and 00050000101B8500, alike.
+/// 00050000101BFC00 and 00050000101B8500, alike. Imaginators alone is told by
+/// its title id, as its own files aren't known yet.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
+    if title(game).is_ok_and(|id| is_imaginators(&id)) {
+        return Err(IMAGINATORS_NOT_YET.to_string());
+    }
     if let Some(bytes) = data_file(game, PORTRAITS)? {
         return swap_force(game, &bytes, folder);
     }
@@ -839,6 +861,32 @@ mod tests {
         assert_eq!(meta_value(meta, "title_id"), Some("00050000101BFC00".to_string()));
         assert_eq!(meta_value(meta, "title_version"), Some("16".to_string()));
         assert_eq!(meta_value(meta, "longname_en"), None);
+    }
+
+    #[test]
+    fn imaginators_is_told_by_its_title_ids() {
+        assert!(is_imaginators("00050000101f4d00"));
+        assert!(is_imaginators("00050000101fb100"));
+        assert!(is_imaginators("0005000010205e00")); // the demo
+        assert!(is_imaginators("0005000e101fb100")); // its update
+        assert!(!is_imaginators("00050000101bfc00")); // SuperChargers
+        assert!(!is_imaginators("101fb100"));
+        assert!(!is_imaginators("BLES02240"));
+    }
+
+    #[test]
+    fn imaginators_is_not_read_as_another_game() {
+        // Its copy is stopped on before any archive in it is looked at, so
+        // one that another game's reader would take changes nothing.
+        let game = std::env::temp_dir().join(format!("omoio-portraits-{}-imaginators", std::process::id()));
+        std::fs::create_dir_all(game.join("meta")).unwrap();
+        std::fs::create_dir_all(game.join("content/archives")).unwrap();
+        let meta = "<menu><title_id type=\"hexBinary\" length=\"8\">00050000101FB100</title_id></menu>";
+        std::fs::write(game.join("meta").join("meta.xml"), meta).unwrap();
+        std::fs::write(game.join("content/archives").join("ToyCollectionMaterials.pak"), b"IGA\x1a not read").unwrap();
+        assert_eq!(pictures(&game, &game.join("pictures")), Err(IMAGINATORS_NOT_YET.to_string()));
+        assert!(!game.join("pictures").exists());
+        std::fs::remove_dir_all(game).unwrap();
     }
 
     #[test]
