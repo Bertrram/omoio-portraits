@@ -418,6 +418,60 @@ pub fn spyros_adventure(source: &str) -> Option<u16> {
     SPYROS_ADVENTURE.iter().find(|(name, _)| *name == code).map(|&(_, id)| id)
 }
 
+/// Spyro's Adventure's versus screen on the Wii, whose pictures have names
+/// of their own, `<name>Left_VS.png`, the game turning each round for the
+/// right side: the name, written small, and the figure's id. They are not
+/// all the PS3's ("airturtle" is Warnado, "seadragon" Zap), so the table was
+/// checked by eye against the PS3's pictures.
+pub const SPYROS_ADVENTURE_WII: &[(&str, u16)] = &[
+    ("airdragon", 0),                // Whirlwind
+    ("gryphon", 1),                  // Sonic Boom
+    ("airturtle", 2),                // Warnado
+    ("stormgiant", 3),               // Lightning Rod
+    ("rockdragon", 4),               // Bash
+    ("landshark", 5),                // Terrafin
+    ("dinorang", 6),                 // Dino Rang
+    ("gemgolem", 7),                 // Prism Break
+    ("pheonixdragon", 8),            // Sunburn
+    ("eruptor", 9),                  // Eruptor
+    ("flameknight", 10),             // Ignitor
+    ("firearcher", 11),              // Flameslinger
+    ("seadragon", 12),               // Zap
+    ("crustbuckler", 13),            // Wham Shell
+    ("gillgrunt", 14),               // Gill Grunt
+    ("yeti", 15),                    // Slam Bam
+    ("spyro", 16),                   // Spyro
+    ("skullorc", 17),                // Voodood
+    ("tikiwizard", 18),              // Double Trouble
+    ("triggerhappy", 19),            // Trigger Happy
+    ("metaldragon", 20),             // Drobot
+    ("drillbot", 21),                // Drill Sergeant
+    ("bombtroll", 22),               // Boomer
+    ("balldragon", 23),              // Wrecking Ball
+    ("plantdragon", 24),             // Camo
+    ("bambazooker", 25),             // Zook
+    ("stealthelf", 26),              // Stealth Elf
+    ("stumpsmash", 27),              // Stump Smash
+    ("darkspyro", 28),               // Dark Spyro
+    ("shadowmaid", 29),              // Hex
+    ("pandoranguard", 30),           // Chop Chop
+    ("ghosteater", 31),              // Ghost Roaster
+    ("cynder", 32),                  // Cynder
+    ("rockdragonlegendary", 404),    // Legendary Bash
+    ("spyrolegendary", 416),         // Legendary Spyro
+    ("triggerhappylegendary", 419),  // Legendary Trigger Happy
+    ("pandoranelitelegendary", 430), // Legendary Chop Chop
+];
+
+/// The figure one of Spyro's Adventure's versus pictures on the Wii shows,
+/// by the name of its file in the game's archive: each is kept in a folder
+/// named like the picture (`.../SpyroJr/Sprite/SpyroLeft_VS.png/0xf848aa48.png.igb.tex.igz`).
+pub fn spyros_adventure_wii(path: &str) -> Option<u16> {
+    let picture = path.rsplit('/').nth(1)?.to_ascii_lowercase();
+    let code = picture.strip_suffix(".png")?.strip_suffix("left_vs")?;
+    SPYROS_ADVENTURE_WII.iter().find(|(name, _)| *name == code).map(|&(_, id)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +527,26 @@ mod tests {
     }
 
     #[test]
+    fn spyros_adventure_wii_pictures_are_told_by_their_archive_names() {
+        let named = |path: &str| spyros_adventure_wii(path);
+        let models = "C:/tfb/build/wii/Models/characters/MinionsMonsters";
+        assert_eq!(named(&format!("{models}/SpyroJr/Sprite/SpyroLeft_VS.png/0xf848aa48.png.igb.tex.igz")), Some(16));
+        // Warnado's is written with a small "left".
+        assert_eq!(named(&format!("{models}/WaterDragon/Sprite/AirTurtleleft_VS.png/0xd9a38319.png.igb.tex.igz")), Some(2));
+        assert_eq!(named(&format!("{models}/PandoranGuard/Sprite/PandoranEliteLegendaryLeft_VS.png/0x8805a580.png.igb.tex.igz")), Some(430));
+        assert_eq!(named(&format!("{models}/SpyroJr/Sprite/SpyroRight_VS.png/0x1.png.igb.tex.igz")), None);
+        assert_eq!(named("C:/tfb/build/wii/Levels/Includes/UI_LevelFullscreen/Fullscreen_pvp001.png/0xf7eb2c54.png.igb.tex.igz"), None);
+        assert_eq!(named("c:/tfb/build/wii/levels/includes/voices/vo_announcer_pvp_142.wav/0xc1c48feb.wav.hz.wav.enc"), None);
+        // The Wii's versus screen shows the same Skylanders as the PS3's.
+        let ids = |table: &[(&str, u16)]| {
+            let mut ids: Vec<u16> = table.iter().map(|&(_, id)| id).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(SPYROS_ADVENTURE_WII), ids(SPYROS_ADVENTURE));
+    }
+
+    #[test]
     fn no_figure_has_two_pictures() {
         for table in [PORTRAITS, GIANTS] {
             let mut seen = std::collections::HashSet::new();
@@ -480,9 +554,11 @@ mod tests {
                 assert!(seen.insert((id, variant)), "{name} repeats a figure");
             }
         }
-        let mut seen = std::collections::HashSet::new();
-        for &(name, id) in SPYROS_ADVENTURE {
-            assert!(seen.insert(id), "{name} repeats a figure");
+        for table in [SPYROS_ADVENTURE, SPYROS_ADVENTURE_WII] {
+            let mut seen = std::collections::HashSet::new();
+            for &(name, id) in table {
+                assert!(seen.insert(id), "{name} repeats a figure");
+            }
         }
     }
 }

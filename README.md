@@ -9,7 +9,8 @@ pictures, and checks it against a fingerprint before it runs.
 It comes with no pictures and downloads none. Everything it writes comes from
 the game files you already have: for a Wii U game, a `.wua` archive from
 Cemu's Title Manager or an unpacked game folder; for a PS3 game, the game's
-folder, the one that holds `PS3_GAME`. It decrypts nothing.
+folder, the one that holds `PS3_GAME`; for a Wii game, its files as
+Dolphin's own tool copies them out of the disc. It decrypts nothing.
 
 ## Use
 
@@ -45,9 +46,10 @@ figures of some variants carry a bit, 0x100, that the game's toy data has no
 field for, so each variant's picture is written with that bit and without
 it.
 
-Spyro's Adventure and Giants on the PS3, SWAP Force and Trap Team on the PS3
-and the Wii U, and SuperChargers and Imaginators on the Wii U are known so
-far. SWAP Force and Trap Team give the same pictures from either.
+Spyro's Adventure on the PS3 and the Wii, Giants on the PS3, SWAP Force and
+Trap Team on the PS3 and the Wii U, and SuperChargers and Imaginators on the
+Wii U are known so far. SWAP Force and Trap Team give the same pictures from
+either.
 
 `survey` is for working out a game that isn't known yet, and writes nothing.
 It prints the game's title id, its files by kind, each archive with its size,
@@ -70,6 +72,18 @@ class as a white shape, `class-knight.png`, `class-bowslinger.png` and so on,
 and `class-kaos.png`; and its badges for a Sensei and an Imaginator as the
 game draws them, `class-sensei.png` and `class-imaginator.png`. Its archives
 have SuperChargers' names, so the two are told apart by the title id.
+
+### Skylanders Spyro's Adventure on the Wii
+
+A Wii disc is encrypted, so the Wii version is read from a copy of the
+game's files that Dolphin's own tool makes, `DolphinTool extract -g`: the
+`DATA` folder it writes, or the folder above it. Of the game's files only
+two are read, `files/misc/PvP_MainControl.arc` and
+`files/permanent/global.bld`, so a copy of just those does as well. It
+writes the same pictures as the PS3 version: each Skylander whole, as its
+versus screen shows them, set in a square and shrunk to 256 pixels, and the
+eight element symbols as white shapes, each cut to the square around its
+shape.
 
 ## Build
 

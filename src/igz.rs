@@ -21,6 +21,20 @@
 //! in table 2, and its pixels at 0x48, as a number in table 10. Worked out
 //! from the game's files.
 //!
+//! Skylanders Spyro's Adventure on the Wii writes version 5, laid out as
+//! version 6 but with a picture's fields elsewhere: its size at 0x0C, its
+//! pixel format at 0x18 and its pixels at 0x24, the format and the pixels
+//! numbers in tables 2 and 10 as in version 6. A file of one picture is laid
+//! out the same way, the picture without a name. Its pictures are CMPR
+//! (`gx`), which keeps no alpha to speak of, so a picture that needs one has
+//! a second picture for it, of the same size and format, marked 0 at 0x1C
+//! where its own picture is not: in a screen named after it with
+//! `_ALPHACHANNEL` added, and in a file of one picture right after it. An
+//! object's start may lie in another section than the objects', as a pointer
+//! gives it. Worked out from the game's files, 8 October 2026: all 553
+//! pictures named so are marked 0, and every file of one picture in its
+//! versus mode holds just the two.
+//!
 //! Skylanders SuperChargers writes version 9, whose files are read here as
 //! the objects they hold (`Objects`), as its toy data needs that too. The
 //! header gives the number of fixup tables at 0x10, and from 0x14 each
@@ -41,6 +55,7 @@
 //! every picture of the game.
 
 const MAGIC: u32 = 0x4947_5a01;
+const SPYROS_ADVENTURE_WII: u32 = 5;
 const GIANTS: u32 = 6;
 const SWAP_FORCE: u32 = 7;
 const TRAP_TEAM: u32 = 8;
@@ -66,6 +81,12 @@ const PICTURE_NAME: usize = 0x08;
 const PICTURE_SIZE: usize = 0x30;
 const PICTURE_FORMAT: usize = 0x3c;
 const PICTURE_PIXELS: usize = 0x48;
+const WII_PICTURE_SIZE: usize = 0x0c;
+const WII_PICTURE_FORMAT: usize = 0x18;
+const WII_PICTURE_PIXELS: usize = 0x24;
+/// Where version 5 marks a picture that is another's alpha, with a 0.
+const WII_PICTURE_ROLE: usize = 0x1c;
+const ALPHA_CHANNEL: &str = "_ALPHACHANNEL";
 /// The table names are four letters stored back to front: "TSTR" is the
 /// table of strings, "EXID" the list of outside things, the pixel format
 /// first.
@@ -84,6 +105,9 @@ pub struct Picture {
     pub width: usize,
     pub height: usize,
     pub pixels: Vec<u8>,
+    /// The pixels of the picture kept for its alpha, in the same format, as
+    /// Spyro's Adventure on the Wii keeps one; `None` everywhere else.
+    pub alpha: Option<Vec<u8>>,
 }
 
 struct Section {
@@ -110,9 +134,9 @@ pub fn version(bytes: &[u8]) -> Option<u32> {
 }
 
 /// Whether files of this version are read here, as single pictures or as
-/// Giants' screens.
+/// screens, Giants' and Spyro's Adventure's on the Wii.
 pub fn known(version: u32) -> bool {
-    matches!(version, GIANTS | SWAP_FORCE | TRAP_TEAM | SUPERCHARGERS)
+    matches!(version, SPYROS_ADVENTURE_WII | GIANTS | SWAP_FORCE | TRAP_TEAM | SUPERCHARGERS)
 }
 
 pub fn read(bytes: &[u8]) -> Option<Picture> {
@@ -164,6 +188,7 @@ pub fn read(bytes: &[u8]) -> Option<Picture> {
         width: be16(bytes, object.offset + size_in_object)?,
         height: be16(bytes, object.offset + size_in_object + 2)?,
         pixels: bytes.get(pixels.offset + pixels.align..pixels.offset + pixels.size)?.to_vec(),
+        alpha: None,
     })
 }
 
@@ -252,6 +277,7 @@ impl<'a> Objects<'a> {
             width: usize::from(self.half(image, IMAGE_SIZE)?),
             height: usize::from(self.half(image, IMAGE_SIZE + 2)?),
             pixels: self.bytes.get(pixels..pixels + size)?.to_vec(),
+            alpha: None,
         })
     }
 
@@ -402,12 +428,17 @@ fn packed_numbers(packed: &[u8], count: usize) -> Option<Vec<usize>> {
 }
 
 /// Every picture in one of Giants' screens, which the game keeps whole in
-/// one file. `None` when the file isn't one; pictures that don't read are
-/// left out.
+/// one file, or in one of Spyro's Adventure's on the Wii or a file of one of
+/// its pictures, each with its alpha. `None` when the file isn't one;
+/// pictures that don't read are left out.
 pub fn screen(bytes: &[u8]) -> Option<Vec<Picture>> {
-    if version(bytes)? != GIANTS {
-        return None;
-    }
+    let version = version(bytes)?;
+    // Where a picture keeps its size, its pixel format and its pixels.
+    let (size_at, format_at, pixels_at) = match version {
+        GIANTS => (PICTURE_SIZE, PICTURE_FORMAT, PICTURE_PIXELS),
+        SPYROS_ADVENTURE_WII => (WII_PICTURE_SIZE, WII_PICTURE_FORMAT, WII_PICTURE_PIXELS),
+        _ => return None,
+    };
     let mut sections = Vec::new();
     let mut at = GIANTS_SECTIONS;
     while be32(bytes, at)? != 0 {
@@ -447,29 +478,78 @@ pub fn screen(bytes: &[u8]) -> Option<Vec<Picture>> {
     let starts = object_starts(bytes.get(packed..)?, count)?;
     let (outside, _) = table(OUTSIDE_THINGS)?;
     let (memory, _) = table(MEMORY)?;
-    let objects = *pools.first()?;
     let picture = |object: usize| {
-        let name = text(bytes, pointer(be32(bytes, object + PICTURE_NAME)?)?)?;
-        let format = be32(bytes, outside + (be32(bytes, object + PICTURE_FORMAT)? as usize & 0xff_ffff) * 8)?;
-        let block = memory + be32(bytes, object + PICTURE_PIXELS)? as usize * 8;
+        let name = match be32(bytes, object + PICTURE_NAME)? {
+            // A file of one of the Wii's pictures leaves it without a name.
+            0 if version == SPYROS_ADVENTURE_WII => "",
+            name => text(bytes, pointer(name)?)?,
+        };
+        let format = be32(bytes, outside + (be32(bytes, object + format_at)? as usize & 0xff_ffff) * 8)?;
+        let block = memory + be32(bytes, object + pixels_at)? as usize * 8;
         let start = pointer(be32(bytes, block + 4)?)?;
         let length = be32(bytes, block)? as usize & 0xff_ffff;
-        Some(Picture {
+        let picture = Picture {
             source: stem(name).to_string(),
             format,
-            width: be16(bytes, object + PICTURE_SIZE)?,
-            height: be16(bytes, object + PICTURE_SIZE + 2)?,
+            width: be16(bytes, object + size_at)?,
+            height: be16(bytes, object + size_at + 2)?,
             pixels: bytes.get(start..start + length)?.to_vec(),
-        })
+            alpha: None,
+        };
+        // Only the Wii's pictures are marked; Giants' just have a word there.
+        Some((name, be32(bytes, object + WII_PICTURE_ROLE)?, picture))
     };
-    Some(
-        starts
-            .into_iter()
-            .map(|start| objects + start)
-            .filter(|&object| be32(bytes, object) == Some(picture_kind))
-            .filter_map(picture)
-            .collect(),
-    )
+    let pictures: Vec<_> = starts
+        .into_iter()
+        .filter_map(|start| pointer(u32::try_from(start).ok()?))
+        .filter(|&object| be32(bytes, object) == Some(picture_kind))
+        .filter_map(picture)
+        .collect();
+    if version == GIANTS {
+        return Some(pictures.into_iter().map(|(_, _, picture)| picture).collect());
+    }
+    Some(with_alphas(pictures))
+}
+
+/// Spyro's Adventure's pictures on the Wii, from each one's whole name, its
+/// mark at 0x1C and the picture, each given the picture kept for its alpha,
+/// which then leaves the list. A picture marked as an alpha whose own
+/// picture isn't there stays in the list as it is.
+fn with_alphas(pictures: Vec<(&str, u32, Picture)>) -> Vec<Picture> {
+    const ALPHA: u32 = 0;
+    let mut alpha_of = vec![None; pictures.len()];
+    let mut taken = vec![false; pictures.len()];
+    for (index, (name, mark, alpha)) in pictures.iter().enumerate() {
+        if *mark != ALPHA {
+            continue;
+        }
+        let own = match name.strip_suffix(ALPHA_CHANNEL) {
+            Some(own) => pictures.iter().position(|(other, mark, _)| *other == own && *mark != ALPHA),
+            None if name.is_empty() => index.checked_sub(1).filter(|&before| pictures[before].0.is_empty() && pictures[before].1 != ALPHA),
+            None => None,
+        };
+        let alike = |own: usize| {
+            let own = &pictures[own].2;
+            (own.format, own.width, own.height) == (alpha.format, alpha.width, alpha.height)
+        };
+        if let Some(own) = own.filter(|&own| alpha_of[own].is_none() && alike(own)) {
+            alpha_of[own] = Some(index);
+            taken[index] = true;
+        }
+    }
+    let mut pictures: Vec<Option<Picture>> = pictures.into_iter().map(|(_, _, picture)| Some(picture)).collect();
+    let mut out = Vec::new();
+    for index in 0..pictures.len() {
+        if taken[index] {
+            continue;
+        }
+        let Some(mut picture) = pictures[index].take() else {
+            continue;
+        };
+        picture.alpha = alpha_of[index].and_then(|alpha| pictures[alpha].take()).map(|alpha| alpha.pixels);
+        out.push(picture);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -798,6 +878,119 @@ pub(crate) mod tests {
             out[at..at + 4].copy_from_slice(&(offset as u32).to_be_bytes());
         }
         out
+    }
+
+    /// A file of version 5 laid out as Spyro's Adventure's on the Wii are: a
+    /// list at 4 and then `pictures`, 0x40 apart from 0x40, each given by
+    /// its whole name (empty for none), its mark at 0x1C, its size and its
+    /// pixels, all in table 2's one format, CMPR's. Its sections are the
+    /// tables, the objects, the strings and the pixels, as the game's.
+    pub(crate) fn build_wii(pictures: &[(&str, u32, u16, u16, &[u8])]) -> Vec<u8> {
+        let word = |out: &mut Vec<u8>, value: u32| out.extend_from_slice(&value.to_be_bytes());
+        let mut out = vec![0; 0x800];
+        out[0..4].copy_from_slice(&MAGIC.to_be_bytes());
+        out[4..8].copy_from_slice(&SPYROS_ADVENTURE_WII.to_be_bytes());
+
+        // The starts: 4, then 0x40, then 0x40 on each time.
+        let steps = std::iter::once(0).chain(std::iter::once(14)).chain(std::iter::repeat(15)).take(1 + pictures.len());
+        let mut nibbles = Vec::new();
+        for mut number in steps {
+            loop {
+                let more = number > 7;
+                nibbles.push((number & 7) as u8 | if more { 8 } else { 0 });
+                number >>= 3;
+                if !more {
+                    break;
+                }
+            }
+        }
+        let packed: Vec<u8> = nibbles.chunks(2).map(|pair| pair[0] | pair.get(1).copied().unwrap_or(0) << 4).collect();
+        let (mut strings, mut pixels, mut memory) = (Vec::new(), Vec::new(), Vec::new());
+        let mut names = Vec::new();
+        for &(name, _, _, _, data) in pictures {
+            names.push(if name.is_empty() { 0 } else { 0x0100_0000 | strings.len() as u32 });
+            if !name.is_empty() {
+                strings.extend_from_slice(name.as_bytes());
+                strings.push(0);
+            }
+            memory.extend_from_slice(&(0x1800_0000 | data.len() as u32).to_be_bytes());
+            memory.extend_from_slice(&(0x0200_0000 | pixels.len() as u32).to_be_bytes());
+            pixels.extend_from_slice(data);
+        }
+        let tables = out.len();
+        let entries: [(u32, usize, Vec<u8>); 4] = [
+            (KINDS, 2, b"igObjectList\0igImage2\0\0\0".to_vec()),
+            (OUTSIDE_THINGS, 1, [0x79dd_819eu32.to_be_bytes(), 0x843c_d0c2u32.to_be_bytes()].concat()),
+            (OBJECTS, 1 + pictures.len(), packed),
+            (MEMORY, pictures.len(), memory),
+        ];
+        out.extend_from_slice(&[0; 0x1c]);
+        out[tables + 0x10..tables + 0x14].copy_from_slice(&(entries.len() as u32).to_be_bytes());
+        out[tables + 0x14..tables + 0x18].copy_from_slice(&0x1cu32.to_be_bytes());
+        for (number, count, mut body) in entries {
+            body.resize(body.len().next_multiple_of(4), 0);
+            word(&mut out, number);
+            word(&mut out, 0);
+            word(&mut out, 0);
+            word(&mut out, count as u32);
+            word(&mut out, 24 + body.len() as u32);
+            word(&mut out, 24);
+            out.extend_from_slice(&body);
+        }
+
+        // The list at 4 is left as zeros, which makes it an igObjectList.
+        let objects = out.len();
+        out.resize(objects + 0x40 * (1 + pictures.len()), 0);
+        for (index, &(_, mark, width, height, _)) in pictures.iter().enumerate() {
+            let picture = objects + 0x40 * (1 + index);
+            let mut field = |at: usize, value: u32| out[picture + at..picture + at + 4].copy_from_slice(&value.to_be_bytes());
+            field(0, 1);
+            field(PICTURE_NAME, names[index]);
+            field(WII_PICTURE_SIZE, u32::from(width) << 16 | u32::from(height));
+            field(WII_PICTURE_FORMAT, 0x8000_0000);
+            field(WII_PICTURE_ROLE, mark);
+            field(WII_PICTURE_PIXELS, index as u32);
+        }
+        let strings_at = out.len();
+        out.extend_from_slice(&strings);
+        let pixels_at = out.len();
+        out.extend_from_slice(&pixels);
+
+        for (index, offset) in [tables, objects, strings_at, pixels_at].into_iter().enumerate() {
+            let at = GIANTS_SECTIONS + index * 16;
+            out[at..at + 4].copy_from_slice(&(offset as u32).to_be_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn a_wii_screen_gives_each_picture_with_its_alpha() {
+        let (colour, alpha, other): (Vec<u8>, Vec<u8>, Vec<u8>) = (vec![1; 32], vec![2; 32], vec![3; 32]);
+        let folder = "levels/includes/ui_main/sprites/elementalicons";
+        let pictures = screen(&build_wii(&[
+            // An alpha may come before its own picture.
+            (&format!("{folder}/fire_128.png_ALPHACHANNEL"), 0, 8, 8, &alpha),
+            (&format!("{folder}/fire_128.png"), 1, 8, 8, &colour),
+            (&format!("{folder}/life_128.png"), 2, 8, 8, &other),
+            // An alpha of another size isn't this picture's.
+            (&format!("{folder}/life_128.png_ALPHACHANNEL"), 0, 16, 8, &[4; 64]),
+        ]))
+        .unwrap();
+        let read: Vec<_> = pictures.iter().map(|picture| (picture.source.as_str(), picture.width, picture.alpha.as_deref())).collect();
+        assert_eq!(read, [("fire_128", 8, Some(&alpha[..])), ("life_128", 8, None), ("life_128", 16, None)]);
+        assert_eq!(pictures[0].pixels, colour);
+        assert_eq!(pictures[0].format, 0x79dd_819e);
+    }
+
+    #[test]
+    fn a_wii_file_of_one_picture_gives_it_with_its_alpha() {
+        let (colour, alpha) = ((0..=255).collect::<Vec<u8>>(), vec![9; 256]);
+        let pictures = screen(&build_wii(&[("", 1, 16, 32, &colour), ("", 0, 16, 32, &alpha)])).unwrap();
+        assert_eq!(pictures.len(), 1);
+        assert_eq!((pictures[0].source.as_str(), pictures[0].width, pictures[0].height), ("", 16, 32));
+        assert_eq!((pictures[0].pixels.as_slice(), pictures[0].alpha.as_deref()), (&colour[..], Some(&alpha[..])));
+        // Two pictures not marked as an alpha stay two.
+        assert_eq!(screen(&build_wii(&[("", 1, 16, 32, &colour), ("", 1, 16, 32, &alpha)])).unwrap().len(), 2);
     }
 
     #[test]
