@@ -33,9 +33,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// The folders of a game folder that hold the game's own files: a Wii U
-/// game's code, content and meta, and a PS3 game's PS3_GAME. Anything else
-/// in the folder isn't the game's and is left alone.
-const GAME_FOLDERS: [&str; 4] = ["code", "content", "meta", "PS3_GAME"];
+/// game's code, content and meta, a PS3 game's PS3_GAME, and a Wii game's
+/// files as Dolphin's own tool copies them, in DATA or the files folder in
+/// it. Anything else in the folder isn't the game's and is left alone.
+const GAME_FOLDERS: [&str; 6] = ["code", "content", "meta", "PS3_GAME", "DATA", "files"];
 const META: &str = "meta/meta.xml";
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
 /// Enough of an archive's first bytes to read its head, and to show the
@@ -97,12 +98,14 @@ const MENU_START: &str = "ui";
 /// The game names a picture's pixel format by the FNV-1a hash of the
 /// format's name: 0x98cb2a65 is "dxt5_tile_cafe", as the readers' own
 /// formats show. So a format is named by trying these names with these
-/// endings, and one that matches none is printed as its number.
-const FORMATS: [&str; 16] = [
+/// endings, and one that matches none is printed as its number. The Wii's
+/// CMPR is "dxt1_tile_big_wii", and Spyro's Adventure there has "i8_wii"
+/// too.
+const FORMATS: [&str; 17] = [
     "dxt1", "dxt3", "dxt5", "a8r8g8b8", "r8g8b8a8", "b8g8r8a8", "x8r8g8b8", "r8g8b8", "r5g6b5", "a1r5g5b5", "a4r4g4b4",
-    "a8", "l8", "l8a8", "a8l8", "ati2",
+    "a8", "l8", "l8a8", "a8l8", "ati2", "i8",
 ];
-const FORMAT_ENDINGS: [&str; 12] = [
+const FORMAT_ENDINGS: [&str; 16] = [
     "",
     "_big",
     "_tile",
@@ -115,6 +118,10 @@ const FORMAT_ENDINGS: [&str; 12] = [
     "_big_ps3",
     "_tile_ps3",
     "_tile_big_ps3",
+    "_wii",
+    "_big_wii",
+    "_tile_wii",
+    "_tile_big_wii",
 ];
 
 /// How many of each list are printed before the rest are only counted.
@@ -841,6 +848,7 @@ mod tests {
         assert_eq!(format_name(crate::DXT5_PS3[0]), "dxt5_tile_big_ps3");
         assert_eq!(format_name(crate::DXT5_PS3[1]), "dxt5_big_ps3");
         assert_eq!(format_name(fnv1a("dxt1_tile_cafe")), "dxt1_tile_cafe");
+        assert_eq!(format_name(crate::CMPR), "dxt1_tile_big_wii");
         assert_eq!(format_name(0x1234_5678), "format 0x12345678");
     }
 
