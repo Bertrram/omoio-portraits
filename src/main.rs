@@ -27,10 +27,13 @@
 //! a SuperCharger, `class-supercharger.png`, and its Land, Sea and Sky
 //! symbols as white shapes, `terrain-<name>.png`. It
 //! prints `progress <done> <of>` as it goes and `done <written>` at the end.
+//! From Imaginators, a .wua of the Wii U version, it writes every toy the
+//! same way, its Senseis and Creation Crystals among them, its eleven
+//! element symbols, Kaos's included, and its battle classes' symbols as
+//! white shapes, `class-<class>.png`, and its badges for a Sensei and an
+//! Imaginator as the game draws them, `class-sensei.png` and
+//! `class-imaginator.png`.
 //! Nothing is downloaded: every picture comes from the user's own files.
-//! Skylanders Imaginators on the Wii U is told by its title ids, but its
-//! pictures aren't known yet, so `pictures` stops on it with a message, as
-//! for any game it doesn't know, and writes nothing.
 //!
 //! A third way is for working out a game that isn't known yet:
 //!
@@ -116,10 +119,38 @@ const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read ye
 /// WiiUBrew's title database (read 7 October 2026), and 0005000010205E00,
 /// which Cemu's graphic packs list beside them in the pack that also patches
 /// a demo (read 8 October 2026). Its update and DLC share the last eight
-/// digits. Its files haven't been seen yet, so `pictures` stops on it rather
-/// than read it as one of the other games.
+/// digits. Its archives have the names SuperChargers' do, so it is told from
+/// SuperChargers by its title id.
 const IMAGINATORS: [&str; 3] = ["101f4d00", "101fb100", "10205e00"];
-const IMAGINATORS_NOT_YET: &str = "Omoio can't read the figure pictures of Skylanders Imaginators yet.";
+/// Imaginators' symbols, seen in Bertram's copy of the European release
+/// with its update, 8 October 2026:
+/// - its menus' element symbols, flat and coloured, Kaos's among them, as
+///   `!MenuComponents!ElementIcon_<Element>2` in `permanent.pak`, made
+///   white like the other games';
+/// - its badges for a Sensei and an Imaginator in the same archive,
+///   `ClassIcon_Sensei3` and `ClassIcon_Imaginator3`, kept as they are;
+/// - a gold symbol for each battle class in `permanent_2016.pak`,
+///   `ClassIcon_<weapon>2`, named by the class's weapon, made white. Which
+///   weapon is which class is the game's own: its pictures for the classes,
+///   `SI_CRM_<Class>Class`, carry the same symbols under the classes' names
+///   (checked by eye).
+const IMAGINATORS_SYMBOLS: &str = "archives/permanent.pak";
+const IMAGINATORS_ELEMENTS: [&str; 11] = ["air", "dark", "earth", "fire", "kaos", "life", "light", "magic", "tech", "undead", "water"];
+const IMAGINATORS_BADGES: [(&str, &str); 2] = [("sensei", "!ClassIcon_Sensei3`tga"), ("imaginator", "!ClassIcon_Imaginator3`tga")];
+const IMAGINATORS_CLASS_ICONS: &str = "archives/permanent_2016.pak";
+const IMAGINATORS_CLASSES: [(&str, &str); 11] = [
+    ("knight", "Sword"),
+    ("bowslinger", "Archer"),
+    ("quickshot", "Pistol"),
+    ("ninja", "Thrown"),
+    ("brawler", "Fist"),
+    ("smasher", "Club"),
+    ("sorcerer", "Mage"),
+    ("swashbuckler", "Blades"),
+    ("sentinel", "Doubler"),
+    ("bazooker", "Bazooka"),
+    ("kaos", "Kaos"),
+];
 /// SuperChargers keeps its toy data in `permanent.pak` (see `toys`) and the
 /// pictures its Collection screen draws each toy with in
 /// `ToyCollectionMaterials.pak`: a material for each,
@@ -302,16 +333,17 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 
 /// Tells the game by its files rather than its title id, so every region's
 /// copy of it is read the same way: SuperChargers' two title ids,
-/// 00050000101BFC00 and 00050000101B8500, alike. Imaginators alone is told by
-/// its title id, as its own files aren't known yet.
+/// 00050000101BFC00 and 00050000101B8500, alike. Imaginators keeps its
+/// archives under SuperChargers' names, so between the two the title id
+/// decides.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
-    if title(game).is_ok_and(|id| is_imaginators(&id)) {
-        return Err(IMAGINATORS_NOT_YET.to_string());
-    }
     if let Some(bytes) = data_file(game, PORTRAITS)? {
         return swap_force(game, &bytes, folder);
     }
     if let Some(bytes) = data_file(game, COLLECTION)? {
+        if title(game).is_ok_and(|id| is_imaginators(&id)) {
+            return imaginators(game, &bytes, folder);
+        }
         return superchargers(game, &bytes, folder);
     }
     // Trap Team on the PS3 has a Collection screen archive named like
@@ -332,6 +364,82 @@ fn superchargers(game: &Path, collection: &[u8], folder: &Path) -> Result<usize,
     let collection = pak::open(collection)?;
     let toy_data = data_file(game, TOY_DATA)?.ok_or(NOT_KNOWN_GAME)?;
     let toy_data = pak::open(&toy_data)?;
+    // The symbols, the badge and the terrains come last, a step each.
+    let written = toy_pictures(&collection, &toy_data, &toys::SUPERCHARGERS, folder, 3)?;
+    let steps = written.steps;
+    let done = steps - 3;
+    let mut symbols = 0;
+    let hub = data_file(game, SUPERCHARGERS_HUB)?.unwrap_or_default();
+    let hub = pak::open(&hub).ok();
+    for element in SUPERCHARGERS_ELEMENTS {
+        let name = format!("!SkyStonesElementicons_{element}_C`tga");
+        let path = folder.join(format!("element-{element}.png"));
+        let mut found = write_symbol(&toy_data, &name, &path, make_white)?;
+        if let (0, Some(hub)) = (found, &hub) {
+            found = write_symbol(hub, &name, &path, make_white)?;
+        }
+        symbols += found;
+    }
+    println!("progress {} {steps}", done + 1);
+    symbols += write_symbol(&toy_data, SUPERCHARGERS_BADGE, &folder.join("class-supercharger.png"), as_drawn)?;
+    println!("progress {} {steps}", done + 2);
+    let race_menu = data_file(game, RACE_MENU)?.unwrap_or_default();
+    if let Ok(race_menu) = pak::open(&race_menu) {
+        for (terrain, name) in TERRAINS {
+            symbols += write_symbol(&race_menu, name, &folder.join(format!("terrain-{terrain}.png")), make_white)?;
+        }
+    }
+    println!("progress {steps} {steps}");
+    Ok(written.count + symbols)
+}
+
+fn imaginators(game: &Path, collection: &[u8], folder: &Path) -> Result<usize, String> {
+    let collection = pak::open(collection)?;
+    let toy_data = data_file(game, IMAGINATORS_SYMBOLS)?.ok_or(NOT_KNOWN_GAME)?;
+    let toy_data = pak::open(&toy_data)?;
+    // The element symbols, the badges and the classes come last, a step each.
+    let written = toy_pictures(&collection, &toy_data, &toys::IMAGINATORS, folder, 3)?;
+    let steps = written.steps;
+    let done = steps - 3;
+    let mut symbols = 0;
+    for element in IMAGINATORS_ELEMENTS {
+        let name = format!("!MenuComponents!ElementIcon_{}2`tga", capitalised(element));
+        symbols += write_symbol(&toy_data, &name, &folder.join(format!("element-{element}.png")), white_without_glow)?;
+    }
+    println!("progress {} {steps}", done + 1);
+    for (badge, name) in IMAGINATORS_BADGES {
+        symbols += write_symbol(&toy_data, name, &folder.join(format!("class-{badge}.png")), as_drawn)?;
+    }
+    println!("progress {} {steps}", done + 2);
+    let classes = data_file(game, IMAGINATORS_CLASS_ICONS)?.unwrap_or_default();
+    if let Ok(classes) = pak::open(&classes) {
+        for (class, weapon) in IMAGINATORS_CLASSES {
+            let name = format!("!ClassIcon_{weapon}2`tga");
+            symbols += write_symbol(&classes, &name, &folder.join(format!("class-{class}.png")), make_white)?;
+        }
+    }
+    println!("progress {steps} {steps}");
+    Ok(written.count + symbols)
+}
+
+/// "air" as the game writes it in a file's name, "Air".
+fn capitalised(word: &str) -> String {
+    let mut letters = word.chars();
+    letters.next().map(|first| first.to_uppercase().chain(letters).collect()).unwrap_or_default()
+}
+
+/// What `toy_pictures` wrote: how many pictures, and how many steps of
+/// progress the whole reading takes.
+struct Written {
+    count: usize,
+    steps: usize,
+}
+
+/// Every toy's Collection picture, as SuperChargers and Imaginators keep
+/// them: a material for each toy in `collection`, which names its picture,
+/// and the toys themselves in `toy_data`. Progress is printed a toy at a
+/// time, with `more` steps left for the caller.
+fn toy_pictures(collection: &pak::Pak, toy_data: &pak::Pak, layout: &toys::Layout, folder: &Path, more: usize) -> Result<Written, String> {
     let mut images = HashMap::new();
     for file in collection.files.iter().filter(|file| file.name.contains(TEXTURES)) {
         if let Some(name) = file.name.split(TEXTURES).nth(1).and_then(|name| name.strip_suffix(IGZ)) {
@@ -353,10 +461,9 @@ fn superchargers(game: &Path, collection: &[u8], folder: &Path) -> Result<usize,
     for file in toy_data.files.iter().filter(|file| file.name.contains(TOY_DATA_FOLDER) && file.name.ends_with(IGZ)) {
         toy_files.push(toy_data.read(file)?);
     }
-    let toys = toys::pictures(toy_files.iter().map(Vec::as_slice));
+    let toys = toys::pictures(toy_files.iter().map(Vec::as_slice), layout);
     std::fs::create_dir_all(folder).map_err(|_| "Couldn't make the folder for the pictures.".to_string())?;
-    // The symbols, the badge and the terrains come last, a step each.
-    let steps = toys.len() + 3;
+    let steps = toys.len() + more;
     let mut written = HashSet::new();
     for (done, toy) in toys.iter().enumerate() {
         println!("progress {done} {steps}");
@@ -374,53 +481,48 @@ fn superchargers(game: &Path, collection: &[u8], folder: &Path) -> Result<usize,
         }
     }
     println!("progress {} {steps}", toys.len());
-    let mut symbols = 0;
-    let hub = data_file(game, SUPERCHARGERS_HUB)?.unwrap_or_default();
-    let hub = pak::open(&hub).ok();
-    for element in SUPERCHARGERS_ELEMENTS {
-        let name = format!("!SkyStonesElementicons_{element}_C`tga");
-        let path = folder.join(format!("element-{element}.png"));
-        let mut found = write_symbol(&toy_data, &name, &path, true)?;
-        if let (0, Some(hub)) = (found, &hub) {
-            found = write_symbol(hub, &name, &path, true)?;
-        }
-        symbols += found;
-    }
-    println!("progress {} {steps}", toys.len() + 1);
-    symbols += write_symbol(&toy_data, SUPERCHARGERS_BADGE, &folder.join("class-supercharger.png"), false)?;
-    println!("progress {} {steps}", toys.len() + 2);
-    let race_menu = data_file(game, RACE_MENU)?.unwrap_or_default();
-    if let Ok(race_menu) = pak::open(&race_menu) {
-        for (terrain, name) in TERRAINS {
-            symbols += write_symbol(&race_menu, name, &folder.join(format!("terrain-{terrain}.png")), true)?;
-        }
-    }
-    println!("progress {steps} {steps}");
-    Ok(written.len() + symbols)
+    Ok(Written { count: written.len(), steps })
 }
 
-/// The picture of an archive whose name holds `name`, written to `path`,
-/// made a white shape when `white`. Gives how many were written: 0 when the
-/// archive has none.
-fn write_symbol(archive: &pak::Pak, name: &str, path: &Path, white: bool) -> Result<usize, String> {
+/// The picture of an archive whose name holds `name`, written to `path`
+/// after `finish` has had it, such as `make_white`. Gives how many were
+/// written: 0 when the archive has none.
+fn write_symbol(archive: &pak::Pak, name: &str, path: &Path, finish: fn(&mut [u8])) -> Result<usize, String> {
     for file in archive.files.iter().filter(|file| file.name.contains(name)) {
         let Some(picture) = igz::read(&archive.read(file)?).filter(|picture| dxt5(picture.format)) else {
             continue;
         };
         let mut rgba = upright(&picture)?;
-        if white {
-            make_white(&mut rgba);
-        }
+        finish(&mut rgba);
         write(path, picture.width, picture.height, &rgba)?;
         return Ok(1);
     }
     Ok(0)
 }
 
+/// A badge kept as the game draws it.
+fn as_drawn(_: &mut [u8]) {}
+
 /// A symbol as a white shape, for Omoio to colour through its alpha.
 fn make_white(rgba: &mut [u8]) {
     for pixel in rgba.chunks_exact_mut(4) {
         pixel[..3].fill(255);
+    }
+}
+
+/// Imaginators' flat element symbols glow: their edge fades out over some
+/// eighteen pixels, and the lines inside them are drawn half see-through
+/// (measured on its Fire symbol, 8 October 2026). Made white as they are,
+/// the glow would blur the shape, so only what is nearly solid is kept, and
+/// the lines inside come out as gaps, as the game draws them.
+const SOLID_FROM: u8 = 176;
+const SOLID_AT: u8 = 240;
+
+fn white_without_glow(rgba: &mut [u8]) {
+    make_white(rgba);
+    for pixel in rgba.chunks_exact_mut(4) {
+        let over = u32::from(pixel[3].saturating_sub(SOLID_FROM));
+        pixel[3] = (over * 255 / u32::from(SOLID_AT - SOLID_FROM)).min(255) as u8;
     }
 }
 
@@ -875,17 +977,63 @@ mod tests {
     }
 
     #[test]
-    fn imaginators_is_not_read_as_another_game() {
-        // Its copy is stopped on before any archive in it is looked at, so
-        // one that another game's reader would take changes nothing.
+    fn a_glowing_symbol_keeps_only_its_solid_part() {
+        // Glow, half see-through lines inside, the edge, and the solid shape.
+        let mut rgba = [10, 20, 30, 0, 9, 9, 9, 100, 9, 9, 9, 176, 9, 9, 9, 208, 9, 9, 9, 240, 9, 9, 9, 255];
+        white_without_glow(&mut rgba);
+        let alphas: Vec<u8> = rgba.chunks_exact(4).map(|pixel| pixel[3]).collect();
+        assert_eq!(alphas, [0, 0, 0, 127, 255, 255]);
+        assert!(rgba.chunks_exact(4).all(|pixel| pixel[..3] == [255, 255, 255]));
+    }
+
+    #[test]
+    fn imaginators_pictures_come_from_its_toy_data_and_its_menus() {
+        use crate::igz::tests::{build_objects, build_picture};
+        let output = "Temporary/BuildServer/cafe/Output";
+        let texture = |name: &str| format!("{output}/textures/GuiStandard_diffuse,textures@{name}`tga,101.igz");
+        let icon = "!ui!Collections!ToyInventoryIcons!2016Characters!S601_Sensei_KingPen";
+        let material = build_objects(
+            &["igObjectList"],
+            &["GuiStandard", "graphics_effect", &format!("GuiStandard_diffuse,textures@{icon}`tga,101"), "image"],
+            &[(0, 1), (2, 3)],
+            None,
+            &[],
+            &[],
+            None,
+        );
+        let picture = build_picture(4, &[0; 1024]);
+        let collection = pak::tests::build_chunked(
+            0x0b,
+            &[
+                (&format!("{output}/materialInstances/ToyCollection/Collection_KingPen_Normal.igz"), &material),
+                (&texture(icon), &picture),
+            ],
+        );
+        // King Pen, with his own variant in Imaginators' year.
+        let toy = toys::tests::build_toy_in(&toys::IMAGINATORS, "CFullCharacterToyData", 601, "KingPen", &["Collection_KingPen_Normal", "Collection_KingPen_Normal"], &[(0, 5, 0)]);
+        let permanent = pak::tests::build_chunked(
+            0x0b,
+            &[
+                (&format!("{output}/ToyData/KingPen_ToyData.igz"), &toy),
+                (&texture("!UI_TFB!MenuComponents!ElementIcon_Kaos2"), &picture),
+                (&texture("!UI_TFB!MenuComponents!ElementIcon_Kaos"), &picture),
+                (&texture("!UI_TFB!ClassIcon_Sensei3"), &picture),
+            ],
+        );
+        let classes = pak::tests::build_chunked(0x0b, &[(&texture("!UI_TFB!ClassIcon_Sword2"), &picture)]);
         let game = std::env::temp_dir().join(format!("omoio-portraits-{}-imaginators", std::process::id()));
         std::fs::create_dir_all(game.join("meta")).unwrap();
-        std::fs::create_dir_all(game.join("content/archives")).unwrap();
         let meta = "<menu><title_id type=\"hexBinary\" length=\"8\">00050000101FB100</title_id></menu>";
         std::fs::write(game.join("meta").join("meta.xml"), meta).unwrap();
-        std::fs::write(game.join("content/archives").join("ToyCollectionMaterials.pak"), b"IGA\x1a not read").unwrap();
-        assert_eq!(pictures(&game, &game.join("pictures")), Err(IMAGINATORS_NOT_YET.to_string()));
-        assert!(!game.join("pictures").exists());
+        std::fs::create_dir_all(game.join("content/archives")).unwrap();
+        for (name, bytes) in [("ToyCollectionMaterials.pak", &collection), ("permanent.pak", &permanent), ("permanent_2016.pak", &classes)] {
+            std::fs::write(game.join("content/archives").join(name), bytes).unwrap();
+        }
+        let folder = game.join("pictures");
+        assert_eq!(pictures(&game, &folder), Ok(6));
+        let mut written: Vec<String> = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        written.sort();
+        assert_eq!(written, ["601-0000.png", "601-5000.png", "601-5100.png", "class-knight.png", "class-sensei.png", "element-kaos.png"]);
         std::fs::remove_dir_all(game).unwrap();
     }
 
