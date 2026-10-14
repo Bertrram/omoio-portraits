@@ -33,7 +33,13 @@ out of one (`villain-<number>-loose.png`). From Spyro's Adventure it writes
 each Skylander whole, as its versus screen shows them, the element symbols,
 and the magic items it has pictures of, as it shows them on screen: on the
 PS3 the four that came with the adventure packs. It prints
-`progress <done> <of>` as it goes and `done <written>` at the end.
+`progress <done> <of>` as it goes and `done <written>` at the end. From
+Trap Team it also prints a line for each picture it passes over,
+`skipped <file>: <the game's file>, <why>`, with the picture's pixel format
+when that is why, so a run on the game shows what is still missing. Its
+pictures are read in DXT1, DXT3 or DXT5, on the PS3 and in the Wii U's
+tiles alike, and in two formats of whole pixels as igRewrite8 writes them
+(see `src/formats.rs`).
 
 From SuperChargers it writes every toy its Collection screen shows, as the
 game's own toy data names them: each vehicle (ids 3220 to 3241), SuperCharger

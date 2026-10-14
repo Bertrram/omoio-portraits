@@ -27,7 +27,9 @@
 //! vehicles and trophies among them, its ten element symbols, its badge for
 //! a SuperCharger, `class-supercharger.png`, and its Land, Sea and Sky
 //! symbols as white shapes, `terrain-<name>.png`. It
-//! prints `progress <done> <of>` as it goes and `done <written>` at the end.
+//! prints `progress <done> <of>` as it goes and `done <written>` at the end,
+//! and from Trap Team `skipped <file>: <the game's file>, <why>` for each
+//! picture it passes over (see `trap_team`).
 //! From Imaginators, a .wua of the Wii U version, it writes every toy the
 //! same way, its Senseis and Creation Crystals among them, its eleven
 //! element symbols, Kaos's included, and its battle classes' symbols as
@@ -50,6 +52,7 @@
 
 mod dxt1;
 mod dxt5;
+mod formats;
 mod gx;
 mod gx2;
 mod igz;
@@ -795,7 +798,19 @@ fn swap_force(game: &Path, bytes: &[u8], folder: &Path) -> Result<usize, String>
     Ok(written)
 }
 
+/// Trap Team's pictures. A picture that can't be read or is in a pixel
+/// format not read here is passed over, and said so on a line of its own,
+/// `skipped <file Omoio wanted>: <the game's file>, <why>`, which Omoio
+/// leaves alone as it reads only `progress` and `done`. Said on the output
+/// Omoio reads as it goes rather than on the error output, which it reads
+/// only once the reader has stopped: lines enough to fill that pipe would
+/// hold the reader up for good.
 fn trap_team(game: &Path, folder: &Path) -> Result<usize, String> {
+    trap_team_saying(game, folder, &mut |line| println!("{line}"))
+}
+
+/// `trap_team`, giving each line about a picture passed over to `say`.
+fn trap_team_saying(game: &Path, folder: &Path, say: &mut dyn FnMut(String)) -> Result<usize, String> {
     let mut archives = Vec::new();
     for inside in TRAP_TEAM {
         archives.push(data_file(game, inside)?.ok_or(NOT_KNOWN_GAME)?);
@@ -814,14 +829,33 @@ fn trap_team(game: &Path, folder: &Path) -> Result<usize, String> {
     let mut written = 0;
     for (done, (archive, file, name)) in wanted.iter().enumerate() {
         println!("progress {done} {steps}");
-        let Some(picture) = igz::read(&archive.read(file)?) else {
+        let bytes = archive.read(file)?;
+        let mut skip = |why: String| say(format!("skipped {name}.png: {}, {why}", file.name));
+        let Some(picture) = igz::read(&bytes) else {
+            skip(match igz::version(&bytes) {
+                Some(version) => format!("igz version {version}, not read as a picture"),
+                None => "not in the game's own format".to_string(),
+            });
             continue;
         };
-        if !dxt5(picture.format) {
+        // DXT5 is read just as it always was.
+        if dxt5(picture.format) {
+            write(&folder.join(format!("{name}.png")), picture.width, picture.height, &upright(&picture)?)?;
+            written += 1;
             continue;
         }
-        write(&folder.join(format!("{name}.png")), picture.width, picture.height, &upright(&picture)?)?;
-        written += 1;
+        let described = format!("format {}, {} x {}", formats::describe(picture.format), picture.width, picture.height);
+        let Some(format) = formats::of(picture.format) else {
+            skip(format!("{described}, a pixel format not read here"));
+            continue;
+        };
+        match upright_in(&picture, format) {
+            Ok(rgba) => {
+                write(&folder.join(format!("{name}.png")), picture.width, picture.height, &rgba)?;
+                written += 1;
+            }
+            Err(why) => skip(format!("{described}, {why}")),
+        }
     }
     println!("progress {steps} {steps}");
     Ok(written)
@@ -1061,6 +1095,32 @@ fn upright(picture: &igz::Picture) -> Result<Vec<u8>, String> {
     Ok(rows.chunks(wide * 16).take(height).rev().flat_map(|row| &row[..width * 4]).copied().collect())
 }
 
+/// A picture in one of the formats `formats` knows, as RGBA, top row first,
+/// as `upright` gives a DXT5 one. Blocks of 4 x 4 or single pixels, in rows
+/// or in the Wii U's tiles, then turned the right way up and cut to size.
+fn upright_in(picture: &igz::Picture, format: formats::Format) -> Result<Vec<u8>, String> {
+    let (width, height) = (picture.width, picture.height);
+    let (side, bytes) = (format.pixels.side(), format.pixels.bytes());
+    let (wide, high) = (width.div_ceil(side), height.div_ceil(side));
+    let elements = if format.tiled {
+        gx2::untile_elements(&picture.pixels, wide, high, bytes)
+    } else {
+        picture.pixels.get(..wide * high * bytes).map(<[u8]>::to_vec)
+    }
+    .ok_or("shorter than its size says")?;
+    let (full_width, full_height) = (wide * side, high * side);
+    let rows = match format.pixels {
+        formats::Pixels::Dxt1 => dxt1::decode(&elements, full_width, full_height),
+        formats::Pixels::Dxt3 => dxt1::decode_dxt3(&elements, full_width, full_height),
+        formats::Pixels::Dxt5 => dxt5::decode(&elements, full_width, full_height),
+        formats::Pixels::Rgba | formats::Pixels::Argb => formats::to_rgba(format.pixels, &elements),
+    };
+    // The game keeps its pictures bottom row first. That pictures of whole
+    // pixels are kept so too is taken from the DXT ones; none of the game's
+    // has shown it yet (14 October 2026).
+    Ok(rows.chunks(full_width * 4).take(height).rev().flat_map(|row| &row[..width * 4]).copied().collect())
+}
+
 fn write(path: &Path, width: usize, height: usize, rgba: &[u8]) -> Result<(), String> {
     let failed = |_| "Couldn't write a picture into the folder.".to_string();
     let file = std::fs::File::create(path).map_err(|_| "Couldn't write a picture into the folder.".to_string())?;
@@ -1290,6 +1350,92 @@ mod tests {
         written.sort();
         assert_eq!(written, ["3413-0000.png", "3413-4403.png", "3413-4503.png", "class-supercharger.png", "element-air.png", "element-water.png", "terrain-sea.png"]);
         std::fs::remove_dir_all(game).unwrap();
+    }
+
+    /// A PNG the reader wrote, as its width, height and RGBA pixels.
+    fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
+        let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        pixels.truncate(info.buffer_size());
+        (info.width, info.height, pixels)
+    }
+
+    #[test]
+    fn trap_team_reads_dxt1_and_says_what_it_passes_over() {
+        use crate::igz::tests::build;
+        const VERSION_8: u32 = 8;
+        let hash = survey::fnv1a;
+        let toys = "C:/tfb/build/wiiu/ui_sky4/collection_images/skylander_toys";
+        // Spyro as the older figures are, DXT5 in the Wii U's tiles: one
+        // block, in a micro tile of its own.
+        let spyro = build(VERSION_8, None, DXT5_TILED, 4, 4, &[0; 1024]);
+        // Snap Shot in DXT1, tiled: one red block whose first row is blue.
+        let mut red = vec![0u8; 512];
+        red[..8].copy_from_slice(&[0x00, 0xf8, 0x1f, 0x00, 0x55, 0, 0, 0]);
+        let snap_shot = build(VERSION_8, None, hash("dxt1_tile_cafe"), 4, 4, &red);
+        // Two more figures: one in a format not read here, one not a picture.
+        let unknown = build(VERSION_8, None, hash("a8_tile_cafe"), 4, 4, &[0; 256]);
+        let newer = b"IGZ\x01\x00\x00\x00\x0a and a version not read here".to_vec();
+        let champions = pak::tests::build_trap_team(&[
+            (&format!("{toys}/2011/2011_skylanders/16_0_spyro.png/0x2.png.igb.tex.igz"), &spyro),
+            (&format!("{toys}/2014/2014_skylanders_regular/462_12288_snapshot.png/0x1.png.igb.tex.igz"), &snap_shot),
+            (&format!("{toys}/2014/2014_skylanders_regular/479_12288_wildfire.png/0x5.png.igb.tex.igz"), &unknown),
+            (&format!("{toys}/2014/2014_skylanders_regular/480_12288_trailblazer.png/0x6.png.igb.tex.igz"), &newer),
+        ]);
+        // A trap of whole RGBA pixels, one pixel in the chip's tiles, and one
+        // in DXT1 as the PS3 keeps it, in rows, too short for its size.
+        let mut pixel = vec![0u8; 256];
+        pixel[..4].copy_from_slice(&[10, 20, 30, 40]);
+        let traps = "C:/tfb/build/wiiu/ui_sky4/collection_images/traps/square";
+        let trap = build(VERSION_8, None, hash("r8g8b8a8_tile_cafe"), 1, 1, &pixel);
+        let short = build(VERSION_8, None, hash("dxt1_big_ps3"), 8, 8, &[0; 8]);
+        let traps = pak::tests::build_trap_team(&[
+            (&format!("{traps}/217_12291.png/0x3.png.igb.tex.igz"), &trap),
+            (&format!("{traps}/210_12288.png/0x4.png.igb.tex.igz"), &short),
+        ]);
+        let vault = pak::tests::build_trap_team(&[]);
+        let game = std::env::temp_dir().join(format!("omoio-portraits-{}-trap-team", std::process::id()));
+        std::fs::create_dir_all(game.join("content/misc")).unwrap();
+        for (inside, bytes) in [(TRAP_TEAM[0], &champions), (TRAP_TEAM[1], &traps), (VILLAIN_VAULT, &vault)] {
+            std::fs::write(game.join("content").join(inside), bytes).unwrap();
+        }
+        let folder = game.join("pictures");
+        let mut said = Vec::new();
+        assert_eq!(trap_team_saying(&game, &folder, &mut |line| said.push(line)), Ok(3));
+        let mut written: Vec<String> = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        written.sort();
+        assert_eq!(written, ["16-0000.png", "217-3003.png", "462-3000.png"]);
+
+        // Snap Shot the right way up: the top row of blocks is kept last,
+        // and the block's first row of pixels is its bottom one here.
+        let (width, height, pixels) = read_png(&folder.join("462-3000.png"));
+        assert_eq!((width, height), (4, 4));
+        assert_eq!(&pixels[..4], [255, 0, 0, 255]);
+        assert_eq!(&pixels[12 * 4..12 * 4 + 4], [0, 0, 255, 255]);
+        assert_eq!(read_png(&folder.join("217-3003.png")), (1, 1, vec![10, 20, 30, 40]));
+        // Spyro comes out just as `upright` gives him.
+        let (_, _, spyro_pixels) = read_png(&folder.join("16-0000.png"));
+        assert_eq!(spyro_pixels, upright(&igz::read(&spyro).unwrap()).unwrap());
+
+        assert_eq!(said.len(), 3, "{said:#?}");
+        assert!(said[0].starts_with("skipped 479-3000.png: C:/tfb/"), "{}", said[0]);
+        assert!(said[0].ends_with(&format!("format a8_tile_cafe, 0x{:08x}, 4 x 4, a pixel format not read here", hash("a8_tile_cafe"))), "{}", said[0]);
+        assert!(said[1].starts_with("skipped 480-3000.png: ") && said[1].ends_with("igz version 10, not read as a picture"), "{}", said[1]);
+        assert!(said[2].starts_with("skipped 210-3000.png: ") && said[2].ends_with(", 8 x 8, shorter than its size says"), "{}", said[2]);
+        assert!(said[2].contains("format dxt1_big_ps3, 0x"), "{}", said[2]);
+        std::fs::remove_dir_all(game).unwrap();
+    }
+
+    #[test]
+    fn dxt5_comes_out_the_same_through_either_reader() {
+        use crate::igz::tests::build;
+        let blocks: Vec<u8> = (0..=255).cycle().take(8192).collect();
+        for format in [DXT5_TILED, DXT5_PS3[0], DXT5_PS3[1]] {
+            let picture = igz::read(&build(8, None, format, 30, 18, &blocks)).unwrap();
+            assert_eq!(upright_in(&picture, formats::of(format).unwrap()), upright(&picture));
+        }
     }
 
     #[test]

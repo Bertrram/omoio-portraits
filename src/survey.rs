@@ -791,11 +791,11 @@ fn holds(name: &str, word: &str) -> bool {
     name.to_ascii_lowercase().contains(&word.to_ascii_lowercase())
 }
 
-fn fnv1a(text: &str) -> u32 {
+pub(crate) fn fnv1a(text: &str) -> u32 {
     text.bytes().fold(0x811c_9dc5, |hash, byte| (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193))
 }
 
-fn format_name(format: u32) -> String {
+pub(crate) fn format_name(format: u32) -> String {
     FORMATS
         .iter()
         .flat_map(|name| FORMAT_ENDINGS.iter().map(move |ending| format!("{name}{ending}")))
