@@ -48,6 +48,7 @@
 //! prints what a reader of its pictures would need to know and writes
 //! nothing (see `survey`).
 
+mod dxt1;
 mod dxt5;
 mod gx;
 mod gx2;
