@@ -43,6 +43,9 @@
 //! its Hall of Heroes shows them and each power disc as the game shows it
 //! when one is put on the base, `<number>.png`, by the number on the toy
 //! (see `infinity`).
+//! From LEGO Dimensions, a PS3 game folder, it writes the picture of each
+//! minifigure and vehicle its character wheel shows, named by the number on
+//! the toy, `<number>.png` (see `dimensions`).
 //! Nothing is downloaded: every picture comes from the user's own files.
 //!
 //! A third way is for working out a game that isn't known yet:
@@ -52,6 +55,7 @@
 //! prints what a reader of its pictures would need to know and writes
 //! nothing (see `survey`).
 
+mod dimensions;
 mod dxt5;
 mod gx;
 mod gx2;
@@ -152,7 +156,7 @@ const WII_TOYS: &str = "item/";
 /// "dxt1_tile_big_wii". Every picture read from the Wii is in it.
 const CMPR: u32 = 0x79dd_819e;
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
-const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure on the PS3 and the Wii, Giants on the PS3, SWAP Force and Trap Team, SuperChargers and Imaginators on the Wii U, and Disney Infinity 1.0 on the PS3.";
+const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure on the PS3 and the Wii, Giants on the PS3, SWAP Force and Trap Team, SuperChargers and Imaginators on the Wii U, and Disney Infinity 1.0 and LEGO Dimensions on the PS3.";
 /// Skylanders Imaginators on the Wii U, by the last eight digits of its title
 /// ids: 00050000101F4D00 and 00050000101FB100, the USA's and Europe's in
 /// WiiUBrew's title database (read 7 October 2026), and 0005000010205E00,
@@ -386,7 +390,8 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 /// decides. The copy Omoio makes of a Wii game holds its files but not the
 /// disc's id, so Spyro's Adventure on the Wii is told by its versus mode's
 /// archive. Disney Infinity, whose archives are named like none of these,
-/// is told by its title id.
+/// and LEGO Dimensions, which keeps none of these files, are told by their
+/// title ids.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     if let Some(bytes) = data_file(game, PORTRAITS)? {
         return swap_force(game, &bytes, folder);
@@ -410,6 +415,9 @@ fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     }
     if title(game).is_ok_and(|id| infinity::knows(&id)) {
         return infinity::pictures(game, folder, &mut |done, of| println!("progress {done} {of}"));
+    }
+    if title(game).is_ok_and(|id| dimensions::knows(&id)) {
+        return dimensions::pictures(game, folder, &mut |done, of| println!("progress {done} {of}"));
     }
     match wii_file(game, SPYROS_ADVENTURE_WII) {
         Some(bytes) => spyros_adventure_wii(game, &bytes, folder),

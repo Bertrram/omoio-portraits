@@ -50,8 +50,8 @@ it.
 
 Spyro's Adventure on the PS3 and the Wii, Giants on the PS3, SWAP Force and
 Trap Team on the PS3 and the Wii U, SuperChargers and Imaginators on the
-Wii U, and Disney Infinity 1.0 on the PS3 are known so far. SWAP Force and
-Trap Team give the same pictures from either.
+Wii U, and Disney Infinity 1.0 and LEGO Dimensions on the PS3 are known so
+far. SWAP Force and Trap Team give the same pictures from either.
 
 `survey` is for working out a game that isn't known yet, and writes nothing.
 It prints the game's title id, its files by kind, each archive with its size,
@@ -102,6 +102,18 @@ cut to the square around its shape. It also writes every magic item (ids
 200 to 207) and adventure pack (300 to 303) as the game shows them on
 screen, each cut to the square around its shape. The game has no bigger
 picture of them than these, 64 pixels square.
+
+### LEGO Dimensions
+
+From LEGO Dimensions, the PS3 game's folder, it writes the picture of each
+minifigure and vehicle its character wheel shows, as `<number>.png` with
+the number on the toy: a minifigure's from 1, each of a vehicle's three
+builds from 1000. The numbers are the game's own, from its list of its
+toys, and the same as Cemu's and RPCS3's. A picture is cut to the square
+around its shape, 128 pixels at most, the size the game keeps it at. The
+2015 disc numbers 44 minifigures and 144 vehicle builds, and also has
+pictures of Harry Potter, Hermione Granger and Lord Vortech, which are
+written by their numbers in Cemu's list.
 
 ## Build
 
