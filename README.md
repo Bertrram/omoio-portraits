@@ -1,10 +1,11 @@
 # omoio-portraits
 
 Reads the figure pictures out of your own copy of Skylanders Spyro's
-Adventure, Giants, SWAP Force, Trap Team, SuperChargers or Imaginators, so
-[Omoio](https://github.com/Bertrram/omoio)'s portal menu can show each figure
-as the game draws it. Omoio downloads this program only when you ask for the
-pictures, and checks it against a fingerprint before it runs.
+Adventure, Giants, SWAP Force, Trap Team, SuperChargers or Imaginators, or of
+Disney Infinity 1.0, so [Omoio](https://github.com/Bertrram/omoio)'s portal
+and Infinity Base menus can show each figure as the game draws it. Omoio
+downloads this program only when you ask for the pictures, and checks it
+against a fingerprint before it runs.
 
 It comes with no pictures and downloads none. Everything it writes comes from
 the game files you already have: for a Wii U game, a `.wua` archive from
@@ -48,9 +49,9 @@ field for, so each variant's picture is written with that bit and without
 it.
 
 Spyro's Adventure on the PS3 and the Wii, Giants on the PS3, SWAP Force and
-Trap Team on the PS3 and the Wii U, and SuperChargers and Imaginators on the
-Wii U are known so far. SWAP Force and Trap Team give the same pictures from
-either.
+Trap Team on the PS3 and the Wii U, SuperChargers and Imaginators on the
+Wii U, and Disney Infinity 1.0 on the PS3 are known so far. SWAP Force and
+Trap Team give the same pictures from either.
 
 `survey` is for working out a game that isn't known yet, and writes nothing.
 It prints the game's title id, its files by kind, each archive with its size,
@@ -73,6 +74,19 @@ class as a white shape, `class-knight.png`, `class-bowslinger.png` and so on,
 and `class-kaos.png`; and its badges for a Sensei and an Imaginator as the
 game draws them, `class-sensei.png` and `class-imaginator.png`. Its archives
 have SuperChargers' names, so the two are told apart by the title id.
+
+### Disney Infinity 1.0
+
+From Disney Infinity 1.0 on the PS3, the game's folder, it writes each
+character whole, as its Hall of Heroes shows them, and each power disc with
+its frame, as the game shows it when one is put on the base, named by the
+number on the toy as Omoio's Infinity Base menu lists it: `<number>.png`,
+1000001 for Mr. Incredible, 3000003 on for the round discs and 4000018 on
+for the hexagonal ones. A crystal figure, and the glowing Buzz Lightyear,
+get their character's picture, as the game has none of its own. Its menus
+show no picture of a play set's piece, so the play sets have none, and the
+figures that came out after the game have none either. Each picture is cut
+to the square around its shape.
 
 ### Skylanders Spyro's Adventure on the Wii
 

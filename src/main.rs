@@ -39,6 +39,10 @@
 //! each Skylander whole as its versus screen shows them, and its element
 //! symbols, as from the PS3 version, and every magic item and adventure pack
 //! as it shows them on screen.
+//! From Disney Infinity 1.0, a PS3 game folder, it writes each character as
+//! its Hall of Heroes shows them and each power disc as the game shows it
+//! when one is put on the base, `<number>.png`, by the number on the toy
+//! (see `infinity`).
 //! Nothing is downloaded: every picture comes from the user's own files.
 //!
 //! A third way is for working out a game that isn't known yet:
@@ -52,6 +56,7 @@ mod dxt5;
 mod gx;
 mod gx2;
 mod igz;
+mod infinity;
 mod names;
 mod pak;
 mod strm;
@@ -147,7 +152,7 @@ const WII_TOYS: &str = "item/";
 /// "dxt1_tile_big_wii". Every picture read from the Wii is in it.
 const CMPR: u32 = 0x79dd_819e;
 const PARAM_SFO: &str = "PS3_GAME/PARAM.SFO";
-const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure on the PS3 and the Wii, Giants on the PS3, SWAP Force and Trap Team, and SuperChargers and Imaginators on the Wii U.";
+const NOT_KNOWN_GAME: &str = "This game has no figure pictures Omoio can read yet. So far that is Skylanders Spyro's Adventure on the PS3 and the Wii, Giants on the PS3, SWAP Force and Trap Team, SuperChargers and Imaginators on the Wii U, and Disney Infinity 1.0 on the PS3.";
 /// Skylanders Imaginators on the Wii U, by the last eight digits of its title
 /// ids: 00050000101F4D00 and 00050000101FB100, the USA's and Europe's in
 /// WiiUBrew's title database (read 7 October 2026), and 0005000010205E00,
@@ -380,7 +385,8 @@ fn textures<'a>(archive: &'a pak::Pak) -> Vec<&'a pak::PakFile> {
 /// archives under SuperChargers' names, so between the two the title id
 /// decides. The copy Omoio makes of a Wii game holds its files but not the
 /// disc's id, so Spyro's Adventure on the Wii is told by its versus mode's
-/// archive.
+/// archive. Disney Infinity, whose archives are named like none of these,
+/// is told by its title id.
 fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     if let Some(bytes) = data_file(game, PORTRAITS)? {
         return swap_force(game, &bytes, folder);
@@ -401,6 +407,9 @@ fn pictures(game: &Path, folder: &Path) -> Result<usize, String> {
     }
     if let Some(bytes) = game_file(game, SPYROS_ADVENTURE)? {
         return spyros_adventure(&bytes, folder);
+    }
+    if title(game).is_ok_and(|id| infinity::knows(&id)) {
+        return infinity::pictures(game, folder, &mut |done, of| println!("progress {done} {of}"));
     }
     match wii_file(game, SPYROS_ADVENTURE_WII) {
         Some(bytes) => spyros_adventure_wii(game, &bytes, folder),
